@@ -1,18 +1,18 @@
 {
-  "name": "mmm-rtsptoweb",
+  "name": "mmm-nest-camera-webrtc",
   "version": "1.0.0",
-  "description": "",
-  "main": "MMM-RTSPtoWeb.js",
+  "description": "Module to display WebRTC stream from a Nest camera on MagicMirror",
+  "main": "MMM-Nest-Camera-WebRTC.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shbatm/MMM-RTSPtoWeb.git"
+    "url": "git+https://github.com/brandaorafael/MMM-Nest-Camera-WebRTC.git"
   },
-  "author": "https://github.com/shbatm",
+  "author": "https://github.com/brandaorafael",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/shbatm/MMM-RTSPtoWeb/issues"
+    "url": "https://github.com/brandaorafael/MMM-Nest-Camera-WebRTC/issues"
   },
-  "homepage": "https://github.com/shbatm/MMM-RTSPtoWeb#readme",
+  "homepage": "https://github.com/brandaorafael/MMM-Nest-Camera-WebRTC#readme",
   "dependencies": {
     "node-fetch": "^2.6.1"
   }

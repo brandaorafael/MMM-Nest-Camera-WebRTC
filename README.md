@@ -1,4 +1,4 @@
-# MMM-RTSPtoWeb
+# MMM-Nest-Camera-WebRTC
 
 MagicMirror2 Module for viewing IP cameras RTSP stream in real time using WebRTC technology.
 

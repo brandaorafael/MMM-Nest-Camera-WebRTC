@@ -1,4 +1,4 @@
-Module.register("MMM-RTSPtoWeb", {
+Module.register("MMM-Nest-Camera-WebRTC", {
     video: null,
     pc: null,
     stream: null,
