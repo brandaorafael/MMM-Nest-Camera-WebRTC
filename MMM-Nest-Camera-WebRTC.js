@@ -8,7 +8,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	suspendedForUserPresence: false,
 
 	defaults: {
-		width: "50%",
+		width: "33%",
 		token: "",
 		url: ""
 	},
