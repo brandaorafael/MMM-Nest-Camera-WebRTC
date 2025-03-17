@@ -9,6 +9,21 @@ module.exports = NodeHelper.create({
 		Log.info(`Starting node_helper for module [${this.name}]`);
 	},
 
+	async getNestToken(payload) {
+		const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&code=${payload.nestCode}&grant_type=authorization_code&redirect_uri=https://www.google.com`;
+		const response = await fetch(url,
+			{
+				headers: {
+					"Content-Type": "application/json"
+				},
+				method: "POST"
+			});
+
+		const resBody = await response.json();
+
+		this.sendSocketNotification(`TOKEN_${payload.identifier}`, resBody);
+	},
+
 	async sendOffer(payload) {
 		const response = await fetch(`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices/${payload.nestDeviceId}:executeCommand`,
 			{
@@ -34,7 +49,7 @@ module.exports = NodeHelper.create({
 	},
 
 	async extendStream(payload) {
-		await fetch(`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices/${payload.nestDeviceId}:executeCommand`,
+		const res = await fetch(`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices/${payload.nestDeviceId}:executeCommand`,
 			{
 				headers: {
 					Authorization: `Bearer ${payload.token}`,
@@ -48,6 +63,23 @@ module.exports = NodeHelper.create({
 					}
 				})
 			});
+
+		const resBody = await res.json();
+
+		if(resBody.error && resBody.error.code === 401){
+			const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&code=${payload.nestCode}&grant_type=authorization_code&redirect_uri=https://www.google.com`;
+			const response = await fetch(url,
+				{
+					headers: {
+						"Content-Type": "application/json"
+					},
+					method: "POST"
+				});
+
+			const resB = await response.json();
+
+			this.sendSocketNotification(`REFRESH_${payload.identifier}`, resB);
+		}
 	},
 
 	async socketNotificationReceived(notification, payload) {
@@ -57,6 +89,12 @@ module.exports = NodeHelper.create({
 				break;
 			case "EXTEND_STREAM":
 				await this.extendStream(payload);
+				break;
+			case "GET_TOKEN":
+				await this.getNestToken(payload);
+				break;
+			case "REFRESH_TOKEN":
+				await this.refreshToken();
 				break;
 		}
 	}

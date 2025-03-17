@@ -4,16 +4,20 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	stream: null,
 	connectTimeout: null,
 
+	token: null,
+	refreshToken: null,
+
 	suspended: false,
 	suspendedForUserPresence: false,
 
 	defaults: {
 		width: "33%",
-		token: "",
-		url: ""
+		nestClientId: '',
+		nestClientSecret: '',
+		nestCode: '',
+		nestProjectId: '',
+		nestDeviceId: ''
 	},
-
-	first: true,
 
 	async start() {
 		if (this.data.hiddenOnStartup) {
@@ -24,7 +28,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		await this.initializeRTCPeerConnection();
 	},
 
-	suspend() {
+	async suspend() {
 		this.suspended = true;
 		if (this.stream) {
 			this.stream.getTracks().forEach((track) => {
@@ -40,7 +44,6 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	async resume() {
 		this.suspended = false;
 		await this.initializeRTCPeerConnection();
-		this.updateDom();
 	},
 
 	getStyles() {
@@ -56,6 +59,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.volume = 1;
 			this.video.muted = true;
 			this.video.style.maxWidth = this.config.width;
+			this.video.style.minWidth = this.config.width;
 			this.video.playsInline = true;
 			this.video.srcObject = this.stream;
 
@@ -93,19 +97,49 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	async socketNotificationReceived(notification, payload) {
-		if (notification === `ANSWER_${this.identifier}`) {
-			Log.log(`${this.name} received answer for ${this.identifier}`);
-			try {
-				await this.pc.setRemoteDescription(
-					new RTCSessionDescription({type: "answer", sdp: payload})
-				);
-			} catch (e) {
-				console.warn(e);
-			}
+		switch (notification) {
+			case `ANSWER_${this.identifier}`:
+				Log.log(`${this.name} received answer for ${this.identifier}`);
+				try {
+					await this.pc.setRemoteDescription(
+						new RTCSessionDescription({type: "answer", sdp: payload})
+					);
+				} catch (e) {
+					console.warn(e);
+				}
+				break;
+			case `TOKEN_${this.identifier}`:
+				this.token = payload.access_token;
+				this.refreshToken = payload.refresh_token;
+				if(payload.error !== 'invalid_grant'){
+					await this.initializeRTCPeerConnection();
+				}
+				break;
+			case `REFRESH_${this.identifier}`:
+				this.token = payload.access_token;
+				this.sendSocketNotification("EXTEND_STREAM", {
+						token: this.token,
+						identifier: this.identifier,
+						nestProjectId: this.config.nestProjectId,
+						nestDeviceId: this.config.nestDeviceId
+					});
+				break;
 		}
+		this.updateDom();
 	},
 
 	async initializeRTCPeerConnection() {
+		if (!this.token) {
+			this.sendSocketNotification("GET_TOKEN", {
+				nestClientId: this.config.nestClientId,
+				nestClientSecret: this.config.nestClientSecret,
+				nestCode: this.config.nestCode,
+				identifier: this.identifier
+			});
+
+			return;
+		}
+
 		Log.log(`${this.name} initializing connection for ${this.identifier}`);
 
 		this.stream = new MediaStream();
@@ -137,10 +171,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			intervalId = setInterval(() => {
 				try {
 					this.sendSocketNotification("EXTEND_STREAM", {
-						token: this.config.token,
+						token: this.token,
 						identifier: this.identifier,
 						nestProjectId: this.config.nestProjectId,
-						nestDeviceId: this.config.nestDeviceId
+						nestDeviceId: this.config.nestDeviceId,
+						nestClientId: this.config.nestClientId,
+						nestClientSecret: this.config.nestClientSecret,
+						nestCode: this.config.nestCode,
 					});
 				} catch (e) {
 					console.warn(e);
@@ -163,7 +200,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			await this.pc.setLocalDescription(offer);
 
 			this.sendSocketNotification("START_STREAM", {
-				token: this.config.token,
+				token: this.token,
 				sdp: this.pc.localDescription.sdp,
 				identifier: this.identifier,
 				nestProjectId: this.config.nestProjectId,
