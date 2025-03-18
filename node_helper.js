@@ -67,7 +67,7 @@ module.exports = NodeHelper.create({
 		const resBody = await res.json();
 
 		if(resBody.error && resBody.error.code === 401){
-			const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&code=${payload.nestCode}&grant_type=authorization_code&redirect_uri=https://www.google.com`;
+			const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&refresh_token=${payload.refreshToken}&grant_type=refresh_token`;
 			const response = await fetch(url,
 				{
 					headers: {
@@ -92,9 +92,6 @@ module.exports = NodeHelper.create({
 				break;
 			case "GET_TOKEN":
 				await this.getNestToken(payload);
-				break;
-			case "REFRESH_TOKEN":
-				await this.refreshToken();
 				break;
 		}
 	}
