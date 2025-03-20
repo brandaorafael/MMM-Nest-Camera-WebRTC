@@ -20,6 +20,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	async start() {
+		this.token = this.config.token;
+		this.refreshToken = this.config.refreshToken;
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
 			this.suspended = true;
@@ -58,8 +60,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.controls = false;
 			this.video.volume = 1;
 			this.video.muted = true;
-			this.video.style.maxWidth = this.config.width;
-			this.video.style.minWidth = this.config.width;
+			// this.video.style.maxWidth = this.config.width;
+			// this.video.style.minWidth = this.config.width;
 			this.video.playsInline = true;
 			this.video.srcObject = this.stream;
 
@@ -129,7 +131,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	async initializeRTCPeerConnection() {
-		if (!this.token) {
+		if (!this.token || !this.refreshToken) {
 			this.sendSocketNotification("GET_TOKEN", {
 				nestClientId: this.config.nestClientId,
 				nestClientSecret: this.config.nestClientSecret,

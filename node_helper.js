@@ -10,8 +10,8 @@ module.exports = NodeHelper.create({
 	},
 
 	async getNestToken(payload) {
-		const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&code=${payload.nestCode}&grant_type=authorization_code&redirect_uri=https://www.google.com`;
-		const response = await fetch(url,
+		Log.info(`Getting Nest token for module [${this.name}]`);
+		const response = await fetch(`https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&code=${payload.nestCode}&grant_type=authorization_code&redirect_uri=https://www.google.com`,
 			{
 				headers: {
 					"Content-Type": "application/json"
@@ -21,10 +21,13 @@ module.exports = NodeHelper.create({
 
 		const resBody = await response.json();
 
+		Log.info(resBody);
+
 		this.sendSocketNotification(`TOKEN_${payload.identifier}`, resBody);
 	},
 
 	async sendOffer(payload) {
+		Log.info(`Getting Nest Media Session for module [${this.name}]`);
 		const response = await fetch(`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices/${payload.nestDeviceId}:executeCommand`,
 			{
 				headers: {
@@ -49,6 +52,7 @@ module.exports = NodeHelper.create({
 	},
 
 	async extendStream(payload) {
+		Log.info(`Extending Stream for module [${this.name}]`);
 		const res = await fetch(`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices/${payload.nestDeviceId}:executeCommand`,
 			{
 				headers: {
@@ -67,6 +71,7 @@ module.exports = NodeHelper.create({
 		const resBody = await res.json();
 
 		if(resBody.error && resBody.error.code === 401){
+			Log.info('Nest token invalid; Refreshing token');
 			const url = `https://www.googleapis.com/oauth2/v4/token?client_id=${payload.nestClientId}&client_secret=${payload.nestClientSecret}&refresh_token=${payload.refreshToken}&grant_type=refresh_token`;
 			const response = await fetch(url,
 				{
