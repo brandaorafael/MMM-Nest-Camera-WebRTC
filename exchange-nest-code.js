@@ -66,8 +66,8 @@ async function main() {
 		console.log("Access token:", tokens.access_token ? "OK" : "missing");
 		console.log("Refresh token:", tokens.refresh_token ? "OK" : "missing (re-auth with access_type=offline&prompt=consent)");
 	} catch (err) {
-		console.error("Exchange failed:", err.message);
-		process.exit(1);
+		console.error("Exchange failed:", err.message, "(continuing with existing tokens if any)");
+		process.exit(0); // Don't fail make run; app may have valid tokens
 	}
 }
 
