@@ -2,16 +2,19 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	video: null,
 	pc: null,
 	stream: null,
-	connectTimeout: null,
+	reconnectTimeout: null,
 
 	token: null,
 	refreshToken: null,
+	needsAuth: false,
+	authUrl: null,
 
 	suspended: false,
 	suspendedForUserPresence: false,
 
 	defaults: {
 		width: "33%",
+		reconnectDelay: 3000,
 		nestClientId: '',
 		nestClientSecret: '',
 		nestCode: '',
@@ -20,8 +23,6 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	async start() {
-		this.token = this.config.token;
-		this.refreshToken = this.config.refreshToken;
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
 			this.suspended = true;
@@ -32,14 +33,28 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	async suspend() {
 		this.suspended = true;
+		if (this.reconnectTimeout) {
+			clearTimeout(this.reconnectTimeout);
+			this.reconnectTimeout = null;
+		}
+		this.cleanupConnection();
+	},
+
+	cleanupConnection() {
+		if (this.reconnectTimeout) {
+			clearTimeout(this.reconnectTimeout);
+			this.reconnectTimeout = null;
+		}
 		if (this.stream) {
-			this.stream.getTracks().forEach((track) => {
-				track.stop();
-			});
+			this.stream.getTracks().forEach((track) => track.stop());
+			this.stream = null;
+		}
+		if (this.pc) {
 			this.pc.close();
 			this.pc = null;
+		}
+		if (this.video) {
 			this.video.srcObject = null;
-			this.stream = null;
 		}
 	},
 
@@ -48,11 +63,28 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		await this.initializeRTCPeerConnection();
 	},
 
+	stop() {
+		this.cleanupConnection();
+	},
+
 	getStyles() {
 		return [`${this.name}.css`];
 	},
 
 	getDom() {
+		if (this.needsAuth) {
+			const authDiv = document.createElement("div");
+			authDiv.classList.add("rtw-error", "small");
+			authDiv.innerHTML = "Nest camera requires authentication. ";
+			const link = document.createElement("a");
+			link.href = this.authUrl || "#";
+			link.target = "_blank";
+			link.rel = "noopener noreferrer";
+			link.textContent = "Click to authorize";
+			authDiv.appendChild(link);
+			authDiv.appendChild(document.createTextNode(", then add the code from the redirect URL to nestCode in config and restart."));
+			return authDiv;
+		}
 		if (this.stream) {
 			this.video = document.createElement("video");
 			this.video.classList.add("rtw-video");
@@ -60,9 +92,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.controls = false;
 			this.video.volume = 1;
 			this.video.muted = true;
-			// this.video.style.maxWidth = this.config.width;
-			// this.video.style.minWidth = this.config.width;
 			this.video.playsInline = true;
+			if (this.config.width) {
+				this.video.style.width = this.config.width;
+			}
 			this.video.srcObject = this.stream;
 
 			const recover = () => {
@@ -77,7 +110,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 		const error = document.createElement("div");
 		error.classList.add("rtw-error", "small");
-		error.innerHTML = "No data from stream";
+		error.innerHTML = "Connecting to Nest camera...";
 		return error;
 	},
 
@@ -102,43 +135,64 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		switch (notification) {
 			case `ANSWER_${this.identifier}`:
 				Log.log(`${this.name} received answer for ${this.identifier}`);
+				if (!this.pc) {
+					Log.warn(`${this.name} received answer but peer connection was closed`);
+					break;
+				}
 				try {
 					await this.pc.setRemoteDescription(
 						new RTCSessionDescription({type: "answer", sdp: payload})
 					);
 				} catch (e) {
-					console.warn(e);
+					Log.warn(`${this.name} setRemoteDescription failed:`, e);
 				}
 				break;
 			case `TOKEN_${this.identifier}`:
 				this.token = payload.access_token;
-				this.refreshToken = payload.refresh_token;
-				if(payload.error !== 'invalid_grant'){
+				this.refreshToken = payload.refresh_token || this.refreshToken;
+				this.needsAuth = false;
+				if (payload.error !== "invalid_grant") {
 					await this.initializeRTCPeerConnection();
 				}
 				break;
+			case `NEED_AUTH_${this.identifier}`:
+				this.needsAuth = true;
+				this.authUrl = payload.authUrl;
+				break;
 			case `REFRESH_${this.identifier}`:
 				this.token = payload.access_token;
-				this.sendSocketNotification("EXTEND_STREAM", {
+				if (payload.refresh_token) {
+					this.refreshToken = payload.refresh_token;
+				}
+				if (payload.retry) {
+					// Token was refreshed after START_STREAM failed; retry full connection
+					this.cleanupConnection();
+					await this.initializeRTCPeerConnection();
+				} else {
+					this.sendSocketNotification("EXTEND_STREAM", {
 						token: this.token,
 						identifier: this.identifier,
 						nestProjectId: this.config.nestProjectId,
-						nestDeviceId: this.config.nestDeviceId
+						nestDeviceId: this.config.nestDeviceId,
+						nestClientId: this.config.nestClientId,
+						nestClientSecret: this.config.nestClientSecret,
+						refreshToken: this.refreshToken
 					});
+				}
 				break;
 		}
 		this.updateDom();
 	},
 
 	async initializeRTCPeerConnection() {
-		if (!this.token || !this.refreshToken) {
+		if (this.suspended) return;
+		if (!this.token) {
 			this.sendSocketNotification("GET_TOKEN", {
 				nestClientId: this.config.nestClientId,
 				nestClientSecret: this.config.nestClientSecret,
 				nestCode: this.config.nestCode,
 				identifier: this.identifier
 			});
-
 			return;
 		}
 
@@ -155,11 +209,14 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		});
 
 		this.pc.onconnectionstatechange = () => {
-			if (this.pc.connectionState === "failed") {
-				console.log(`${this.name} connection in failed state, restarting`);
-				this.pc.close();
-				this.video.srcObject = null;
-				this.initializeRTCPeerConnection();
+			if (this.pc.connectionState === "failed" && !this.suspended) {
+				const delay = this.config.reconnectDelay ?? 3000;
+				Log.log(`${this.name} connection in failed state, reconnecting in ${delay}ms`);
+				this.cleanupConnection();
+				this.reconnectTimeout = setTimeout(() => {
+					this.reconnectTimeout = null;
+					this.initializeRTCPeerConnection();
+				}, delay);
 			}
 		};
 
@@ -182,17 +239,20 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 						refreshToken: this.refreshToken,
 					});
 				} catch (e) {
-					console.warn(e);
+					Log.warn(`${this.name} EXTEND_STREAM notification failed:`, e);
 				}
 			}, 300000);
 		};
 		pingChannel.onclose = () => {
 			clearInterval(intervalId);
-			if (this.suspended) {
-				return;
-			} // Closed due to module being hidden
-			console.log(`${this.name} ping channel closed; restarting...`);
-			this.initializeRTCPeerConnection();
+			if (this.suspended) return;
+			const delay = this.config.reconnectDelay ?? 3000;
+			Log.log(`${this.name} ping channel closed; reconnecting in ${delay}ms`);
+			this.cleanupConnection();
+			this.reconnectTimeout = setTimeout(() => {
+				this.reconnectTimeout = null;
+				this.initializeRTCPeerConnection();
+			}, delay);
 		};
 
 		this.pc.addTransceiver("audio", {direction: "recvonly"});
@@ -206,7 +266,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				sdp: this.pc.localDescription.sdp,
 				identifier: this.identifier,
 				nestProjectId: this.config.nestProjectId,
-				nestDeviceId: this.config.nestDeviceId
+				nestDeviceId: this.config.nestDeviceId,
+				nestClientId: this.config.nestClientId,
+				nestClientSecret: this.config.nestClientSecret,
+				refreshToken: this.refreshToken
 			});
 		};
 	}
