@@ -15,6 +15,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	defaults: {
 		width: "33%",
 		reconnectDelay: 3000,
+		extendInterval: 240000,
 		nestClientId: '',
 		nestClientSecret: '',
 		nestCode: '',
@@ -55,6 +56,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 		if (this.video) {
 			this.video.srcObject = null;
+			this.video = null;
 		}
 	},
 
@@ -86,6 +88,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			return authDiv;
 		}
 		if (this.stream) {
+			// Reuse existing video element to avoid size flicker from recreating
+			if (this.video && this.video.srcObject === this.stream) {
+				return this.video;
+			}
 			this.video = document.createElement("video");
 			this.video.classList.add("rtw-video");
 			this.video.autoplay = true;
@@ -93,10 +99,22 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.volume = 1;
 			this.video.muted = true;
 			this.video.playsInline = true;
+			// Explicit dimensions prevent collapse before stream metadata loads and prevent
+			// resizing when the stream changes resolution (adaptive bitrate).
 			if (this.config.width) {
 				this.video.style.width = this.config.width;
+				// If width is in pixels, lock height too so both dimensions are fixed and
+				// the browser cannot reflow the element when video intrinsic size changes.
+				const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
+				if (pxMatch) {
+					this.video.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
+				}
 			}
+			this.video.style.aspectRatio = "16 / 9";
+			this.video.style.minWidth = "320px";
+			this.video.style.minHeight = "180px";
 			this.video.srcObject = this.stream;
+			this.video.play().catch(() => {});
 
 			const recover = () => {
 				this.video.srcObject = this.stream;
@@ -143,6 +161,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					await this.pc.setRemoteDescription(
 						new RTCSessionDescription({type: "answer", sdp: payload})
 					);
+					this.updateDom();
 				} catch (e) {
 					Log.warn(`${this.name} setRemoteDescription failed:`, e);
 				}
@@ -154,10 +173,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				if (payload.error !== "invalid_grant") {
 					await this.initializeRTCPeerConnection();
 				}
+				this.updateDom();
 				break;
 			case `NEED_AUTH_${this.identifier}`:
 				this.needsAuth = true;
 				this.authUrl = payload.authUrl;
+				this.updateDom();
+				break;
+			case `RECONNECT_${this.identifier}`:
+				Log.log(`${this.name} session invalid; reconnecting`);
+				this.cleanupConnection();
+				await this.initializeRTCPeerConnection();
+				this.updateDom();
 				break;
 			case `REFRESH_${this.identifier}`:
 				this.token = payload.access_token;
@@ -179,9 +206,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 						refreshToken: this.refreshToken
 					});
 				}
+				// Only update DOM when retrying (stream was cleared); skip for extend to avoid size flicker
+				if (payload.retry) this.updateDom();
 				break;
 		}
-		this.updateDom();
 	},
 
 	async initializeRTCPeerConnection() {
@@ -222,11 +250,15 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 		this.pc.ontrack = (event) => {
 			this.stream.addTrack(event.track);
+			if (event.track.kind === "video") {
+				this.updateDom();
+			}
 		};
 
 		const pingChannel = this.pc.createDataChannel("ping");
 		let intervalId;
 		pingChannel.onopen = () => {
+			const interval = this.config.extendInterval ?? 240000;
 			intervalId = setInterval(() => {
 				try {
 					this.sendSocketNotification("EXTEND_STREAM", {
@@ -241,7 +273,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				} catch (e) {
 					Log.warn(`${this.name} EXTEND_STREAM notification failed:`, e);
 				}
-			}, 300000);
+			}, interval);
 		};
 		pingChannel.onclose = () => {
 			clearInterval(intervalId);

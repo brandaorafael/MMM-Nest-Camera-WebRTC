@@ -2,9 +2,19 @@
   display: inline-block;
 }
 
-.region .rtw-video {
-  width: 600px;
+/* Base sizing - applies regardless of parent; prevents collapse before video metadata loads */
+.rtw-video {
   display: block;
+  width: 100%;
+  min-width: 320px;
+  min-height: 180px;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+}
+
+.region .rtw-video {
+  width: 640px;
+  height: 360px;
 }
 
 .rtw-error {}
