@@ -43,12 +43,14 @@ To get your Google Token, refrain to https://developers.google.com/nest/device-a
 
 ## Configuration
 
-| Option        | Default value | Description       |
-|---------------|---------------|-------------------|
-| width         | 33%           | Max video width   |
-| nestProjectId | N/A           | Google Project ID |
-| nestDeviceId  | N/A           | Google Device ID  |
-| token         | N/A           | Google API ID     |
+| Option         | Default value | Description                                                                 |
+|----------------|---------------|-----------------------------------------------------------------------------|
+| width          | 33%           | Max video width                                                             |
+| extendInterval | 240000        | Interval (ms) to extend the stream. Nest sessions expire in 5 min; use &lt;5 min |
+| nestProjectId  | N/A           | Google Project ID                                                           |
+| nestDeviceId   | N/A           | Google Device ID                                                            |
+| nestClientId   | N/A           | OAuth client ID                                                             |
+| nestClientSecret | N/A         | OAuth client secret                                                         |
 
 ---
 

@@ -215,13 +215,20 @@ module.exports = NodeHelper.create({
 					saveTokens(newTokens);
 					this.sendSocketNotification(`REFRESH_${payload.identifier}`, {
 						...refreshBody,
-						refresh_token: refreshBody.refresh_token || payload.refreshToken
+						refresh_token: refreshBody.refresh_token || payload.refreshToken,
+						retry: true
 					});
 				} else {
 					Log.error(`Token refresh failed during extend: ${JSON.stringify(refreshBody)}`);
 				}
 			} else {
 				Log.error(`Extend stream failed: ${JSON.stringify(resBody.error)}`);
+				// Invalid session (e.g. 400 FAILED_PRECONDITION) - session is dead, trigger full reconnection
+				if (resBody.error.code === 400 || resBody.error.status === "FAILED_PRECONDITION") {
+					delete mediaSessionIds[payload.identifier];
+					Log.info(`Clearing invalid session; notifying frontend to reconnect`);
+					this.sendSocketNotification(`RECONNECT_${payload.identifier}`);
+				}
 			}
 		}
 	},
