@@ -2,6 +2,8 @@
 
 A [MagicMirror²](https://github.com/MichMich/MagicMirror) module that displays a live WebRTC stream from a Google Nest camera via the Device Access API. Includes an audio frequency visualizer synced to the camera's audio track.
 
+![MMM-Nest-Camera-WebRTC preview](screenshots/preview.png)
+
 ---
 
 ## Requirements
