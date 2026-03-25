@@ -13,6 +13,8 @@
     "url": "https://github.com/brandaorafael/MMM-Nest-Camera-WebRTC/issues"
   },
   "homepage": "https://github.com/brandaorafael/MMM-Nest-Camera-WebRTC#readme",
+  "keywords": ["magicmirror", "magicmirror2", "magicmirror-module", "nest", "camera", "webrtc", "google", "smart-home"],
+  "engines": { "node": ">=18.0.0" },
   "dependencies": {
     "node-fetch": "^2.6.1"
   }
