@@ -1,5 +1,6 @@
 Module.register("MMM-Nest-Camera-WebRTC", {
 	video: null,
+	wrapper: null,
 	pc: null,
 	stream: null,
 	reconnectTimeout: null,
@@ -11,6 +12,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	suspended: false,
 	suspendedForUserPresence: false,
+
+	// Audio visualizer
+	audioCtx: null,
+	analyser: null,
+	audioSource: null,
+	equalizerCanvas: null,
+	animFrameId: null,
 
 	defaults: {
 		width: "33%",
@@ -24,6 +32,12 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	async start() {
+		const required = ["nestProjectId", "nestDeviceId", "nestClientId", "nestClientSecret"];
+		for (const key of required) {
+			if (!this.config[key]) {
+				Log.warn(`[MMM-Nest-Camera-WebRTC] Missing required config option: ${key}`);
+			}
+		}
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
 			this.suspended = true;
@@ -46,6 +60,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			clearTimeout(this.reconnectTimeout);
 			this.reconnectTimeout = null;
 		}
+		this.cleanupAudio();
 		if (this.stream) {
 			this.stream.getTracks().forEach((track) => track.stop());
 			this.stream = null;
@@ -58,6 +73,100 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.srcObject = null;
 			this.video = null;
 		}
+		this.equalizerCanvas = null;
+		this.wrapper = null;
+	},
+
+	cleanupAudio() {
+		if (this.animFrameId) {
+			cancelAnimationFrame(this.animFrameId);
+			this.animFrameId = null;
+		}
+		if (this.audioSource) {
+			this.audioSource.disconnect();
+			this.audioSource = null;
+		}
+		if (this.analyser) {
+			this.analyser.disconnect();
+			this.analyser = null;
+		}
+		if (this.audioCtx) {
+			this.audioCtx.close();
+			this.audioCtx = null;
+		}
+	},
+
+	startAudioVisualizer() {
+		if (this.audioCtx) return; // already running
+		const audioTracks = this.stream ? this.stream.getAudioTracks() : [];
+		if (!audioTracks.length || !this.equalizerCanvas) return;
+
+		try {
+			this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+			this.analyser = this.audioCtx.createAnalyser();
+			this.analyser.fftSize = 64;
+			this.analyser.smoothingTimeConstant = 0.85;
+			this.analyser.minDecibels = -70;
+
+			// Connect the stream's audio to the analyser without routing to speakers
+			const silentStream = new MediaStream(audioTracks);
+			this.audioSource = this.audioCtx.createMediaStreamSource(silentStream);
+			this.audioSource.connect(this.analyser);
+			// Intentionally NOT connecting analyser to audioCtx.destination → stays silent
+
+			this.drawEqualizer();
+		} catch (e) {
+			Log.warn(`${this.name} audio visualizer init failed:`, e);
+		}
+	},
+
+	drawEqualizer() {
+		if (!this.analyser || !this.equalizerCanvas) return;
+
+		const canvas = this.equalizerCanvas;
+		const ctx = canvas.getContext("2d");
+		const bufferLength = this.analyser.frequencyBinCount;
+		const dataArray = new Uint8Array(bufferLength);
+
+		const BAR_COUNT = 10;
+		const BAR_GAP = 3;
+
+		const draw = () => {
+			this.animFrameId = requestAnimationFrame(draw);
+			if (!this.analyser || !canvas.isConnected) return;
+
+			this.analyser.getByteFrequencyData(dataArray);
+
+			const W = canvas.width;
+			const H = canvas.height;
+			ctx.clearRect(0, 0, W, H);
+
+			const barW = (W - BAR_GAP * (BAR_COUNT - 1)) / BAR_COUNT;
+			const step = Math.floor(bufferLength / BAR_COUNT);
+
+			for (let i = 0; i < BAR_COUNT; i++) {
+				// Average a small bucket of frequency bins per bar
+				let sum = 0;
+				for (let j = 0; j < step; j++) sum += dataArray[i * step + j];
+				const avg = sum / step;
+
+				const barH = Math.max(2, (avg / 255) * H);
+				const x = i * (barW + BAR_GAP);
+				const y = H - barH;
+
+				// Gradient: cyan at bottom fading to white at top
+				const grad = ctx.createLinearGradient(0, H, 0, 0);
+				grad.addColorStop(0, "rgba(100, 220, 255, 0.9)");
+				grad.addColorStop(1, "rgba(255, 255, 255, 0.6)");
+
+				ctx.fillStyle = grad;
+				ctx.beginPath();
+				ctx.roundRect(x, y, barW, barH, 2);
+				ctx.fill();
+			}
+		};
+
+		draw();
 	},
 
 	async resume() {
@@ -88,10 +197,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			return authDiv;
 		}
 		if (this.stream) {
-			// Reuse existing video element to avoid size flicker from recreating
-			if (this.video && this.video.srcObject === this.stream) {
-				return this.video;
+			// Reuse existing wrapper to avoid size flicker from recreating
+			if (this.wrapper && this.video && this.video.srcObject === this.stream) {
+				return this.wrapper;
 			}
+
+			this.cleanupAudio();
+
 			this.video = document.createElement("video");
 			this.video.classList.add("rtw-video");
 			this.video.autoplay = true;
@@ -114,7 +226,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.style.minWidth = "320px";
 			this.video.style.minHeight = "180px";
 			this.video.srcObject = this.stream;
-			this.video.play().catch(() => {});
+			this.video.play().catch((err) => Log.warn(`[MMM-Nest-Camera-WebRTC] Video playback failed: ${err.message}`));
 
 			const recover = () => {
 				this.video.srcObject = this.stream;
@@ -123,7 +235,21 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.video.onstalled = recover;
 			this.video.onerror = recover;
 
-			return this.video;
+			const canvas = document.createElement("canvas");
+			canvas.classList.add("rtw-equalizer");
+			canvas.width = 18;
+			canvas.height = 200;
+			this.equalizerCanvas = canvas;
+
+			this.wrapper = document.createElement("div");
+			this.wrapper.classList.add("rtw-wrapper");
+			this.wrapper.appendChild(this.video);
+			this.wrapper.appendChild(canvas);
+
+			// Defer so the canvas is connected to the DOM before we start drawing
+			setTimeout(() => this.startAudioVisualizer(), 0);
+
+			return this.wrapper;
 		}
 
 		const error = document.createElement("div");
@@ -252,6 +378,9 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			this.stream.addTrack(event.track);
 			if (event.track.kind === "video") {
 				this.updateDom();
+			} else if (event.track.kind === "audio") {
+				// Audio may arrive after the DOM is already built; start visualizer if canvas is ready
+				setTimeout(() => this.startAudioVisualizer(), 0);
 			}
 		};
 
