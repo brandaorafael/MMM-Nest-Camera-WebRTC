@@ -126,6 +126,7 @@ module.exports = NodeHelper.create({
 		);
 		} catch (err) {
 			Log.error(`Nest API request failed: ${err.message}`);
+			this.sendSocketNotification(`RECONNECT_${payload.identifier}`);
 			return;
 		}
 
@@ -194,6 +195,8 @@ module.exports = NodeHelper.create({
 		);
 		} catch (err) {
 			Log.error(`Extend stream request failed: ${err.message}`);
+			delete mediaSessionIds[payload.identifier];
+			this.sendSocketNotification(`RECONNECT_${payload.identifier}`);
 			return;
 		}
 
