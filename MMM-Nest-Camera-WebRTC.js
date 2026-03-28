@@ -10,6 +10,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	needsAuth: false,
 	authUrl: null,
 	tokenExpired: false,
+	noSignal: false,
+	noSignalRetryInterval: null,
 
 	suspended: false,
 	suspendedForUserPresence: false,
@@ -76,6 +78,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 		this.equalizerCanvas = null;
 		this.wrapper = null;
+		this.noSignal = false;
+		this.stopNoSignalRetry();
 	},
 
 	cleanupAudio() {
@@ -183,16 +187,36 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		return [`${this.name}.css`];
 	},
 
-	getDom() {
-		if (this.tokenExpired) {
-			const expired = document.createElement("div");
-			expired.classList.add("rtw-expired");
-			if (this.config.width) expired.style.width = this.config.width;
-			const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
-			if (pxMatch) expired.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
-			expired.textContent = "Expired Token";
-			return expired;
+	startNoSignalRetry() {
+		if (this.noSignalRetryInterval) return;
+		this.noSignalRetryInterval = setInterval(async () => {
+			if (!this.noSignal || this.suspended) return;
+			Log.log(`${this.name} no signal retry: reconnecting`);
+			this.cleanupConnection();
+			await this.initializeRTCPeerConnection();
+		}, 30000);
+	},
+
+	stopNoSignalRetry() {
+		if (this.noSignalRetryInterval) {
+			clearInterval(this.noSignalRetryInterval);
+			this.noSignalRetryInterval = null;
 		}
+	},
+
+	_makeDarkScreen(message) {
+		const el = document.createElement("div");
+		el.classList.add("rtw-dark-screen");
+		if (this.config.width) el.style.width = this.config.width;
+		const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
+		if (pxMatch) el.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
+		el.textContent = message;
+		return el;
+	},
+
+	getDom() {
+		if (this.tokenExpired) return this._makeDarkScreen("Expired Token");
+		if (this.noSignal) return this._makeDarkScreen("No Signal");
 		if (this.needsAuth) {
 			const authDiv = document.createElement("div");
 			authDiv.classList.add("rtw-error", "small");
@@ -393,6 +417,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.pc.ontrack = (event) => {
 			this.stream.addTrack(event.track);
 			if (event.track.kind === "video") {
+				event.track.onmute = () => {
+					this.noSignal = true;
+					this.startNoSignalRetry();
+					this.updateDom();
+				};
+				event.track.onunmute = () => {
+					this.noSignal = false;
+					this.stopNoSignalRetry();
+					this.updateDom();
+				};
+				this.noSignal = event.track.muted;
+				if (this.noSignal) this.startNoSignalRetry();
 				this.updateDom();
 			} else if (event.track.kind === "audio") {
 				// Audio may arrive after the DOM is already built; start visualizer if canvas is ready
