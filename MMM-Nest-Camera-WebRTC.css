@@ -33,3 +33,15 @@
 }
 
 .rtw-error {}
+
+.rtw-expired {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 320px;
+  min-height: 180px;
+  aspect-ratio: 16 / 9;
+  background: rgba(10, 10, 10, 0.9);
+  color: #fff;
+  font-size: 1.2em;
+}

@@ -138,6 +138,7 @@ module.exports = NodeHelper.create({
 				const refreshToken = payload.refreshToken || loadTokens()?.refresh_token;
 				if (!refreshToken) {
 					Log.error("Token expired and no refresh token available; add nestCode to config and restart");
+					this.sendSocketNotification(`TOKEN_EXPIRED_${payload.identifier}`, {});
 					return;
 				}
 				Log.info("Nest token expired; refreshing token");
@@ -154,6 +155,7 @@ module.exports = NodeHelper.create({
 					});
 				} else {
 					Log.error(`Token refresh failed: ${JSON.stringify(refreshBody)}`);
+					this.sendSocketNotification(`TOKEN_EXPIRED_${payload.identifier}`, {});
 				}
 			}
 			return;
@@ -207,6 +209,7 @@ module.exports = NodeHelper.create({
 				const refreshToken = payload.refreshToken || loadTokens()?.refresh_token;
 				if (!refreshToken) {
 					Log.error("Token expired and no refresh token available");
+					this.sendSocketNotification(`TOKEN_EXPIRED_${payload.identifier}`, {});
 					return;
 				}
 				Log.info("Nest token invalid; Refreshing token");
@@ -223,6 +226,7 @@ module.exports = NodeHelper.create({
 					});
 				} else {
 					Log.error(`Token refresh failed during extend: ${JSON.stringify(refreshBody)}`);
+					this.sendSocketNotification(`TOKEN_EXPIRED_${payload.identifier}`, {});
 				}
 			} else {
 				Log.error(`Extend stream failed: ${JSON.stringify(resBody.error)}`);

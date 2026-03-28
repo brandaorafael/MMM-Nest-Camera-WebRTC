@@ -9,6 +9,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	refreshToken: null,
 	needsAuth: false,
 	authUrl: null,
+	tokenExpired: false,
 
 	suspended: false,
 	suspendedForUserPresence: false,
@@ -183,6 +184,15 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	getDom() {
+		if (this.tokenExpired) {
+			const expired = document.createElement("div");
+			expired.classList.add("rtw-expired");
+			if (this.config.width) expired.style.width = this.config.width;
+			const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
+			if (pxMatch) expired.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
+			expired.textContent = "Expired Token";
+			return expired;
+		}
 		if (this.needsAuth) {
 			const authDiv = document.createElement("div");
 			authDiv.classList.add("rtw-error", "small");
@@ -277,6 +287,11 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	async socketNotificationReceived(notification, payload) {
 		switch (notification) {
+			case `TOKEN_EXPIRED_${this.identifier}`:
+				this.tokenExpired = true;
+				this.cleanupConnection();
+				this.updateDom();
+				break;
 			case `ANSWER_${this.identifier}`:
 				Log.log(`${this.name} received answer for ${this.identifier}`);
 				if (!this.pc) {
@@ -340,6 +355,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	async initializeRTCPeerConnection() {
 		if (this.suspended) return;
+		if (this.tokenExpired) return;
 		if (!this.token) {
 			this.sendSocketNotification("GET_TOKEN", {
 				nestClientId: this.config.nestClientId,
