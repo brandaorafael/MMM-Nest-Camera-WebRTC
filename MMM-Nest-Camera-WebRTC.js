@@ -4,6 +4,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	pc: null,
 	stream: null,
 	reconnectTimeout: null,
+	disconnectTimeout: null,
 
 	token: null,
 	refreshToken: null,
@@ -62,6 +63,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		if (this.reconnectTimeout) {
 			clearTimeout(this.reconnectTimeout);
 			this.reconnectTimeout = null;
+		}
+		if (this.disconnectTimeout) {
+			clearTimeout(this.disconnectTimeout);
+			this.disconnectTimeout = null;
 		}
 		this.cleanupAudio();
 		if (this.stream) {
@@ -403,14 +408,35 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		});
 
 		this.pc.onconnectionstatechange = () => {
-			if (this.pc.connectionState === "failed" && !this.suspended) {
+			if (this.suspended) return;
+			const state = this.pc.connectionState;
+			if (state === "failed") {
 				const delay = this.config.reconnectDelay ?? 3000;
-				Log.log(`${this.name} connection in failed state, reconnecting in ${delay}ms`);
+				Log.log(`${this.name} connection failed, reconnecting in ${delay}ms`);
 				this.cleanupConnection();
 				this.reconnectTimeout = setTimeout(() => {
 					this.reconnectTimeout = null;
 					this.initializeRTCPeerConnection();
 				}, delay);
+			} else if (state === "disconnected") {
+				// "disconnected" can be transient — give it 15s to self-recover before forcing reconnect
+				if (!this.disconnectTimeout) {
+					Log.log(`${this.name} connection disconnected, will force reconnect in 15s if not recovered`);
+					this.disconnectTimeout = setTimeout(() => {
+						this.disconnectTimeout = null;
+						if (this.pc && this.pc.connectionState === "disconnected" && !this.suspended) {
+							Log.log(`${this.name} connection still disconnected, forcing reconnect`);
+							this.cleanupConnection();
+							this.initializeRTCPeerConnection();
+						}
+					}, 15000);
+				}
+			} else if (state === "connected") {
+				// Self-recovered from disconnected — cancel the pending forced reconnect
+				if (this.disconnectTimeout) {
+					clearTimeout(this.disconnectTimeout);
+					this.disconnectTimeout = null;
+				}
 			}
 		};
 
