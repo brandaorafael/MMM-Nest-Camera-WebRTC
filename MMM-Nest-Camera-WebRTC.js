@@ -328,8 +328,12 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					break;
 				}
 				try {
+					// Patch SDP: Electron 41+ is strict about direction compatibility.
+					// Nest may return sendrecv in the answer; replace with sendonly
+					// to match our recvonly offer.
+					const patchedSdp = payload.replace(/\ba=sendrecv\b/g, "a=sendonly");
 					await this.pc.setRemoteDescription(
-						new RTCSessionDescription({type: "answer", sdp: payload})
+						new RTCSessionDescription({type: "answer", sdp: patchedSdp})
 					);
 					this.updateDom();
 				} catch (e) {
