@@ -339,12 +339,35 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 	},
 
+	// A camera can be the hero only if it's actually displaying live video.
+	isViewable(cameraId) {
+		const c = this.cameras[cameraId];
+		return !!(c && c.pc && c.stream && !c.noSignal && !c.tokenExpired);
+	},
+
 	advanceHero(step) {
 		const ids = this.cameraOrder;
 		if (ids.length <= 1) return;
-		const cur = ids.indexOf(this.heroId);
-		const next = (((cur + step) % ids.length) + ids.length) % ids.length;
-		this.setHero(ids[next]);
+		const start = ids.indexOf(this.heroId);
+		// Walk in the requested direction to the next VIEWABLE camera, skipping
+		// any that are offline / No Signal so a dead feed never becomes the hero.
+		for (let i = 1; i <= ids.length; i++) {
+			const idx = (((start + step * i) % ids.length) + ids.length) % ids.length;
+			if (idx === start) break;
+			if (this.isViewable(ids[idx])) {
+				this.setHero(ids[idx]);
+				return;
+			}
+		}
+		// No other viewable camera — leave the hero where it is.
+	},
+
+	// If the current hero can't display (offline / No Signal / still connecting),
+	// hand the hero spot to the first camera that is actually streaming.
+	ensureViewableHero() {
+		if (this.isViewable(this.heroId)) return;
+		const firstViewable = this.cameraOrder.find((id) => this.isViewable(id));
+		if (firstViewable) this.setHero(firstViewable);
 	},
 
 	setHero(cameraId) {
@@ -665,6 +688,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			case "TOKEN_EXPIRED":
 				cam.tokenExpired = true;
 				this.cleanupConnection(cameraId);
+				if (this.heroId === cameraId) this.ensureViewableHero();
 				this.updateDom();
 				break;
 			case "STREAM_UNAVAILABLE":
@@ -674,6 +698,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.cleanupConnection(cameraId);
 				cam.noSignal = true;
 				this.startNoSignalRetry(cameraId);
+				if (this.heroId === cameraId) this.ensureViewableHero();
 				this.updateDom();
 				break;
 			case "RECONNECT":
@@ -792,15 +817,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				event.track.onmute = () => {
 					cam.noSignal = true;
 					this.startNoSignalRetry(cameraId);
+					if (this.heroId === cameraId) this.ensureViewableHero();
 					this.updateDom();
 				};
 				event.track.onunmute = () => {
 					cam.noSignal = false;
 					this.stopNoSignalRetry(cameraId);
+					this.ensureViewableHero();
 					this.updateDom();
 				};
 				cam.noSignal = event.track.muted;
 				if (cam.noSignal) this.startNoSignalRetry(cameraId);
+				else this.ensureViewableHero();
 				this.updateDom();
 			} else if (event.track.kind === "audio") {
 				// Audio may arrive after the DOM is already built; start visualizer if this is the hero
