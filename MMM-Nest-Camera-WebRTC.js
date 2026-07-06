@@ -112,6 +112,9 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			disconnectTimeout: null,
 			noSignalRetryInterval: null,
 			pingIntervalId: null,
+			// True while we tear the connection down on purpose, so the ping
+			// channel's onclose doesn't schedule a competing reconnect.
+			deliberateClose: false,
 			// Audio visualizer (hero only)
 			audioCtx: null,
 			analyser: null,
@@ -156,6 +159,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	cleanupConnection(cameraId) {
 		const cam = this.cameras[cameraId];
 		if (!cam) return;
+		cam.deliberateClose = true;
 		if (cam.reconnectTimeout) {
 			clearTimeout(cam.reconnectTimeout);
 			cam.reconnectTimeout = null;
@@ -737,6 +741,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 
 		Log.log(`${this.name} initializing connection for ${cam.name} (${cameraId})`);
+		cam.deliberateClose = false;
 
 		cam.stream = new MediaStream();
 		cam.pc = new RTCPeerConnection({
@@ -819,7 +824,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				clearInterval(cam.pingIntervalId);
 				cam.pingIntervalId = null;
 			}
-			if (this.suspended) return;
+			// Don't reconnect if we closed the connection on purpose — the code path
+			// that tore it down (suspend, no-signal retry, STREAM_UNAVAILABLE, …)
+			// owns the decision to reconnect.
+			if (this.suspended || cam.deliberateClose) return;
 			const delay = cam.config.reconnectDelay ?? 3000;
 			Log.log(`${this.name} ping channel closed (${cam.name}); reconnecting in ${delay}ms`);
 			this.cleanupConnection(cameraId);
