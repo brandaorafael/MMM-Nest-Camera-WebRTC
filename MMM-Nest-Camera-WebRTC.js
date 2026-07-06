@@ -1,151 +1,261 @@
 Module.register("MMM-Nest-Camera-WebRTC", {
-	video: null,
-	wrapper: null,
-	pc: null,
-	stream: null,
-	reconnectTimeout: null,
-	disconnectTimeout: null,
-
-	token: null,
-	refreshToken: null,
-	needsAuth: false,
-	authUrl: null,
-	tokenExpired: false,
-	noSignal: false,
-	noSignalRetryInterval: null,
-
-	suspended: false,
-	suspendedForUserPresence: false,
-
-	// Audio visualizer
-	audioCtx: null,
-	analyser: null,
-	audioSource: null,
-	equalizerCanvas: null,
-	animFrameId: null,
-
 	defaults: {
+		// Legacy single-camera keys (still supported for back-compat)
 		width: "33%",
-		reconnectDelay: 3000,
-		extendInterval: 240000,
 		nestClientId: '',
 		nestClientSecret: '',
 		nestCode: '',
 		nestProjectId: '',
-		nestDeviceId: ''
+		nestDeviceId: '',
+
+		// Multi-camera
+		cameras: [],            // [{ name, nestDeviceId, width?, extendInterval?, reconnectDelay? }]
+		layout: "hero",         // 'hero' now; 'grid' | 'carousel' | 'focus' are Phase 3 stubs
+		cycleInterval: 0,       // ms; 0 = off. Rotates the hero camera automatically.
+		heroWidth: null,        // falls back to `width`
+		thumbWidth: "15%",
+
+		reconnectDelay: 3000,
+		extendInterval: 240000  // must be < 300000 (Nest sessions expire at 5 min)
+	},
+
+	getStyles() {
+		return [`${this.name}.css`];
 	},
 
 	async start() {
-		const required = ["nestProjectId", "nestDeviceId", "nestClientId", "nestClientSecret"];
-		for (const key of required) {
-			if (!this.config[key]) {
-				Log.warn(`[MMM-Nest-Camera-WebRTC] Missing required config option: ${key}`);
-			}
-		}
+		// Module-level (account-scoped) state — one Google account = one token
+		this.cameras = {};        // keyed by cameraId
+		this.cameraOrder = [];     // ordered cameraIds
+		this.token = null;
+		this.refreshToken = null;
+		this.tokenRequested = false;
+		this.needsAuth = false;    // account-level auth gate
+		this.authUrl = null;
+		this.heroId = null;
+		this.cycleTimer = null;
+		this.suspended = false;
+		this.suspendedForUserPresence = false;
+
+		this.normalizeCameras();
+
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
 			this.suspended = true;
 			return;
 		}
-		await this.initializeRTCPeerConnection();
+		await this.initAllCameras();
+		this.startCycle();
+	},
+
+	// ---------------------------------------------------------------------------
+	// Config normalization
+	// ---------------------------------------------------------------------------
+
+	normalizeCameras() {
+		const account = {
+			nestProjectId: this.config.nestProjectId,
+			nestClientId: this.config.nestClientId,
+			nestClientSecret: this.config.nestClientSecret,
+			nestCode: this.config.nestCode
+		};
+
+		// Multi-camera config, or fall back to legacy single-camera keys
+		const list = Array.isArray(this.config.cameras) && this.config.cameras.length
+			? this.config.cameras
+			: (this.config.nestDeviceId ? [{name: "Camera", nestDeviceId: this.config.nestDeviceId}] : []);
+
+		list.forEach((c, i) => {
+			const cfg = {
+				name: c.name || `Camera ${i + 1}`,
+				nestDeviceId: c.nestDeviceId,
+				nestProjectId: c.nestProjectId || account.nestProjectId,
+				nestClientId: c.nestClientId || account.nestClientId,
+				nestClientSecret: c.nestClientSecret || account.nestClientSecret,
+				nestCode: c.nestCode || account.nestCode,
+				extendInterval: c.extendInterval || this.config.extendInterval,
+				reconnectDelay: c.reconnectDelay || this.config.reconnectDelay
+			};
+
+			const required = ["nestProjectId", "nestDeviceId", "nestClientId", "nestClientSecret"];
+			for (const key of required) {
+				if (!cfg[key]) {
+					Log.warn(`[${this.name}] camera "${cfg.name}" missing required config option: ${key}`);
+				}
+			}
+
+			const cameraId = `${this.identifier}__${i}`;
+			this.cameras[cameraId] = this.makeCameraState(cameraId, cfg);
+			this.cameraOrder.push(cameraId);
+		});
+
+		if (this.cameraOrder.length && !this.heroId) {
+			this.heroId = this.cameraOrder[0];
+		}
+	},
+
+	makeCameraState(cameraId, config) {
+		return {
+			cameraId,
+			config,
+			name: config.name,
+			pc: null,
+			stream: null,
+			video: null,
+			wrapper: null,
+			canvas: null,
+			needsAuth: false,
+			authUrl: null,
+			tokenExpired: false,
+			noSignal: false,
+			reconnectTimeout: null,
+			disconnectTimeout: null,
+			noSignalRetryInterval: null,
+			pingIntervalId: null,
+			// Audio visualizer (hero only)
+			audioCtx: null,
+			analyser: null,
+			audioSource: null,
+			animFrameId: null
+		};
+	},
+
+	// ---------------------------------------------------------------------------
+	// Lifecycle
+	// ---------------------------------------------------------------------------
+
+	async initAllCameras() {
+		for (const cameraId of this.cameraOrder) {
+			await this.initializeRTCPeerConnection(cameraId);
+		}
+	},
+
+	cleanupAllCameras() {
+		for (const cameraId of this.cameraOrder) {
+			this.cleanupConnection(cameraId);
+		}
 	},
 
 	async suspend() {
 		this.suspended = true;
-		if (this.reconnectTimeout) {
-			clearTimeout(this.reconnectTimeout);
-			this.reconnectTimeout = null;
-		}
-		this.cleanupConnection();
+		this.stopCycle();
+		this.cleanupAllCameras();
 	},
 
-	cleanupConnection() {
-		if (this.reconnectTimeout) {
-			clearTimeout(this.reconnectTimeout);
-			this.reconnectTimeout = null;
-		}
-		if (this.disconnectTimeout) {
-			clearTimeout(this.disconnectTimeout);
-			this.disconnectTimeout = null;
-		}
-		this.cleanupAudio();
-		if (this.stream) {
-			this.stream.getTracks().forEach((track) => track.stop());
-			this.stream = null;
-		}
-		if (this.pc) {
-			this.pc.close();
-			this.pc = null;
-		}
-		if (this.video) {
-			this.video.srcObject = null;
-			this.video = null;
-		}
-		this.equalizerCanvas = null;
-		this.wrapper = null;
-		this.noSignal = false;
-		this.stopNoSignalRetry();
+	async resume() {
+		this.suspended = false;
+		await this.initAllCameras();
+		this.startCycle();
 	},
 
-	cleanupAudio() {
-		if (this.animFrameId) {
-			cancelAnimationFrame(this.animFrameId);
-			this.animFrameId = null;
+	stop() {
+		this.stopCycle();
+		this.cleanupAllCameras();
+	},
+
+	cleanupConnection(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		if (cam.reconnectTimeout) {
+			clearTimeout(cam.reconnectTimeout);
+			cam.reconnectTimeout = null;
 		}
-		if (this.audioSource) {
-			this.audioSource.disconnect();
-			this.audioSource = null;
+		if (cam.disconnectTimeout) {
+			clearTimeout(cam.disconnectTimeout);
+			cam.disconnectTimeout = null;
 		}
-		if (this.analyser) {
-			this.analyser.disconnect();
-			this.analyser = null;
+		if (cam.pingIntervalId) {
+			clearInterval(cam.pingIntervalId);
+			cam.pingIntervalId = null;
 		}
-		if (this.audioCtx) {
-			this.audioCtx.close();
-			this.audioCtx = null;
+		this.cleanupAudio(cameraId);
+		if (cam.stream) {
+			cam.stream.getTracks().forEach((track) => track.stop());
+			cam.stream = null;
+		}
+		if (cam.pc) {
+			cam.pc.close();
+			cam.pc = null;
+		}
+		if (cam.video) {
+			cam.video.srcObject = null;
+			cam.video = null;
+		}
+		cam.canvas = null;
+		cam.wrapper = null;
+		cam.noSignal = false;
+		this.stopNoSignalRetry(cameraId);
+	},
+
+	cleanupAudio(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		if (cam.animFrameId) {
+			cancelAnimationFrame(cam.animFrameId);
+			cam.animFrameId = null;
+		}
+		if (cam.audioSource) {
+			cam.audioSource.disconnect();
+			cam.audioSource = null;
+		}
+		if (cam.analyser) {
+			cam.analyser.disconnect();
+			cam.analyser = null;
+		}
+		if (cam.audioCtx) {
+			cam.audioCtx.close();
+			cam.audioCtx = null;
 		}
 	},
 
-	startAudioVisualizer() {
-		if (this.audioCtx) return; // already running
-		const audioTracks = this.stream ? this.stream.getAudioTracks() : [];
-		if (!audioTracks.length || !this.equalizerCanvas) return;
+	// ---------------------------------------------------------------------------
+	// Audio visualizer (hero camera only)
+	// ---------------------------------------------------------------------------
+
+	startAudioVisualizer(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		if (cameraId !== this.heroId) return;   // only the hero tile shows an equalizer
+		if (cam.audioCtx) return;               // already running
+		const audioTracks = cam.stream ? cam.stream.getAudioTracks() : [];
+		if (!audioTracks.length || !cam.canvas) return;
 
 		try {
-			this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-			this.analyser = this.audioCtx.createAnalyser();
-			this.analyser.fftSize = 64;
-			this.analyser.smoothingTimeConstant = 0.85;
-			this.analyser.minDecibels = -70;
+			cam.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+			cam.analyser = cam.audioCtx.createAnalyser();
+			cam.analyser.fftSize = 64;
+			cam.analyser.smoothingTimeConstant = 0.85;
+			cam.analyser.minDecibels = -70;
 
 			// Connect the stream's audio to the analyser without routing to speakers
 			const silentStream = new MediaStream(audioTracks);
-			this.audioSource = this.audioCtx.createMediaStreamSource(silentStream);
-			this.audioSource.connect(this.analyser);
+			cam.audioSource = cam.audioCtx.createMediaStreamSource(silentStream);
+			cam.audioSource.connect(cam.analyser);
 			// Intentionally NOT connecting analyser to audioCtx.destination → stays silent
 
-			this.drawEqualizer();
+			this.drawEqualizer(cameraId);
 		} catch (e) {
 			Log.warn(`${this.name} audio visualizer init failed:`, e);
 		}
 	},
 
-	drawEqualizer() {
-		if (!this.analyser || !this.equalizerCanvas) return;
+	drawEqualizer(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam || !cam.analyser || !cam.canvas) return;
 
-		const canvas = this.equalizerCanvas;
+		const canvas = cam.canvas;
 		const ctx = canvas.getContext("2d");
-		const bufferLength = this.analyser.frequencyBinCount;
+		const bufferLength = cam.analyser.frequencyBinCount;
 		const dataArray = new Uint8Array(bufferLength);
 
 		const BAR_COUNT = 10;
 		const BAR_GAP = 3;
 
 		const draw = () => {
-			this.animFrameId = requestAnimationFrame(draw);
-			if (!this.analyser || !canvas.isConnected) return;
+			cam.animFrameId = requestAnimationFrame(draw);
+			if (!cam.analyser || !canvas.isConnected) return;
 
-			this.analyser.getByteFrequencyData(dataArray);
+			cam.analyser.getByteFrequencyData(dataArray);
 
 			const W = canvas.width;
 			const H = canvas.height;
@@ -179,49 +289,116 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		draw();
 	},
 
-	async resume() {
-		this.suspended = false;
-		await this.initializeRTCPeerConnection();
-	},
+	// ---------------------------------------------------------------------------
+	// No-signal recovery (per camera)
+	// ---------------------------------------------------------------------------
 
-	stop() {
-		this.cleanupConnection();
-	},
-
-	getStyles() {
-		return [`${this.name}.css`];
-	},
-
-	startNoSignalRetry() {
-		if (this.noSignalRetryInterval) return;
-		this.noSignalRetryInterval = setInterval(async () => {
-			if (!this.noSignal || this.suspended) return;
-			Log.log(`${this.name} no signal retry: reconnecting`);
-			this.cleanupConnection();
-			await this.initializeRTCPeerConnection();
+	startNoSignalRetry(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam || cam.noSignalRetryInterval) return;
+		cam.noSignalRetryInterval = setInterval(async () => {
+			if (!cam.noSignal || this.suspended) return;
+			Log.log(`${this.name} no signal retry: reconnecting ${cam.name}`);
+			this.cleanupConnection(cameraId);
+			await this.initializeRTCPeerConnection(cameraId);
 		}, 30000);
 	},
 
-	stopNoSignalRetry() {
-		if (this.noSignalRetryInterval) {
-			clearInterval(this.noSignalRetryInterval);
-			this.noSignalRetryInterval = null;
+	stopNoSignalRetry(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		if (cam.noSignalRetryInterval) {
+			clearInterval(cam.noSignalRetryInterval);
+			cam.noSignalRetryInterval = null;
 		}
 	},
+
+	// ---------------------------------------------------------------------------
+	// Auto-cycle + hero selection
+	// ---------------------------------------------------------------------------
+
+	startCycle() {
+		this.stopCycle();
+		const interval = this.config.cycleInterval;
+		if (!interval || interval <= 0) return;
+		if (this.cameraOrder.length <= 1) return;
+		this.cycleTimer = setInterval(() => {
+			if (this.suspended) return;
+			this.advanceHero(1);
+		}, interval);
+	},
+
+	stopCycle() {
+		if (this.cycleTimer) {
+			clearInterval(this.cycleTimer);
+			this.cycleTimer = null;
+		}
+	},
+
+	advanceHero(step) {
+		const ids = this.cameraOrder;
+		if (ids.length <= 1) return;
+		const cur = ids.indexOf(this.heroId);
+		const next = (((cur + step) % ids.length) + ids.length) % ids.length;
+		this.setHero(ids[next]);
+	},
+
+	setHero(cameraId) {
+		if (!this.cameras[cameraId] || this.heroId === cameraId) return;
+		this.heroId = cameraId;
+		// updateDom re-renders; renderCameraTile reuses cached <video> elements (no stream
+		// restart) and _syncEqualizer moves the equalizer to the new hero.
+		this.updateDom();
+	},
+
+	resolveCameraId(payload) {
+		if (payload == null) return null;
+		if (typeof payload === "number") return this.cameraOrder[payload] || null;
+		if (typeof payload === "string") {
+			if (this.cameras[payload]) return payload;
+			const byName = this.cameraOrder.find((id) => this.cameras[id].name === payload);
+			if (byName) return byName;
+			const asIdx = parseInt(payload, 10);
+			if (!isNaN(asIdx) && this.cameraOrder[asIdx]) return this.cameraOrder[asIdx];
+		}
+		if (typeof payload === "object") {
+			if (payload.cameraId && this.cameras[payload.cameraId]) return payload.cameraId;
+			if (payload.name) {
+				const id = this.cameraOrder.find((i) => this.cameras[i].name === payload.name);
+				if (id) return id;
+			}
+			if (typeof payload.index === "number") return this.cameraOrder[payload.index] || null;
+		}
+		return null;
+	},
+
+	// ---------------------------------------------------------------------------
+	// DOM / layout
+	// ---------------------------------------------------------------------------
 
 	_makeDarkScreen(message) {
 		const el = document.createElement("div");
 		el.classList.add("rtw-dark-screen");
-		if (this.config.width) el.style.width = this.config.width;
-		const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
-		if (pxMatch) el.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
 		el.textContent = message;
 		return el;
 	},
 
+	_stateTile(cameraId, contentEl) {
+		const wrapper = document.createElement("div");
+		wrapper.classList.add("rtw-wrapper");
+		wrapper.appendChild(contentEl);
+		const label = document.createElement("div");
+		label.classList.add("rtw-label");
+		label.textContent = this.cameras[cameraId].name;
+		wrapper.appendChild(label);
+		return wrapper;
+	},
+
 	getDom() {
-		if (this.tokenExpired) return this._makeDarkScreen("Expired Token");
-		if (this.noSignal) return this._makeDarkScreen("No Signal");
+		const root = document.createElement("div");
+		root.classList.add("rtw-root", `rtw-layout-${this.config.layout || "hero"}`);
+
+		// Account-level auth gate applies to every camera
 		if (this.needsAuth) {
 			const authDiv = document.createElement("div");
 			authDiv.classList.add("rtw-error", "small");
@@ -233,98 +410,239 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			link.textContent = "Click to authorize";
 			authDiv.appendChild(link);
 			authDiv.appendChild(document.createTextNode(", then add the code from the redirect URL to nestCode in config and restart."));
-			return authDiv;
+			root.appendChild(authDiv);
+			return root;
 		}
-		if (this.stream) {
-			// Reuse existing wrapper to avoid size flicker from recreating
-			if (this.wrapper && this.video && this.video.srcObject === this.stream) {
-				return this.wrapper;
+
+		if (!this.cameraOrder.length) {
+			root.classList.add("rtw-error", "small");
+			root.textContent = "No cameras configured.";
+			return root;
+		}
+
+		root.style.setProperty("--hero-width", this.config.heroWidth || this.config.width);
+		root.style.setProperty("--thumb-width", this.config.thumbWidth);
+
+		switch (this.config.layout) {
+			case "grid":
+				this.renderGrid(root);
+				break;
+			case "carousel":
+				this.renderCarousel(root);
+				break;
+			case "focus":
+				this.renderFocus(root);
+				break;
+			case "hero":
+			default:
+				this.renderHero(root);
+		}
+		return root;
+	},
+
+	renderHero(root) {
+		const heroId = this.cameras[this.heroId] ? this.heroId : this.cameraOrder[0];
+
+		const heroWrap = document.createElement("div");
+		heroWrap.classList.add("rtw-hero");
+		heroWrap.appendChild(this.renderCameraTile(heroId, true));
+		root.appendChild(heroWrap);
+
+		const others = this.cameraOrder.filter((id) => id !== heroId);
+		if (others.length) {
+			const thumbs = document.createElement("div");
+			thumbs.classList.add("rtw-thumbs");
+			for (const id of others) {
+				thumbs.appendChild(this.renderCameraTile(id, false));
+			}
+			root.appendChild(thumbs);
+		}
+	},
+
+	// Phase 3 stubs — CSS scaffolding exists; render branches land later.
+	renderGrid(root) {
+		Log.warn(`${this.name} layout 'grid' not implemented yet; falling back to hero`);
+		this.renderHero(root);
+	},
+	renderCarousel(root) {
+		Log.warn(`${this.name} layout 'carousel' not implemented yet; falling back to hero`);
+		this.renderHero(root);
+	},
+	renderFocus(root) {
+		Log.warn(`${this.name} layout 'focus' not implemented yet; falling back to hero`);
+		this.renderHero(root);
+	},
+
+	renderCameraTile(cameraId, isHero) {
+		const cam = this.cameras[cameraId];
+		if (cam.tokenExpired) return this._stateTile(cameraId, this._makeDarkScreen("Expired Token"));
+		if (cam.noSignal) return this._stateTile(cameraId, this._makeDarkScreen("No Signal"));
+
+		if (cam.stream) {
+			// Reuse existing wrapper to avoid restarting the stream / size flicker.
+			// Moving the cached <video> between the hero and thumbnail containers keeps
+			// it playing; only the equalizer needs to follow the hero.
+			if (cam.wrapper && cam.video && cam.video.srcObject === cam.stream) {
+				this._syncEqualizer(cameraId, isHero);
+				return cam.wrapper;
 			}
 
-			this.cleanupAudio();
+			this.cleanupAudio(cameraId);
 
-			this.video = document.createElement("video");
-			this.video.classList.add("rtw-video");
-			this.video.autoplay = true;
-			this.video.controls = false;
-			this.video.volume = 1;
-			this.video.muted = true;
-			this.video.playsInline = true;
-			// Explicit dimensions prevent collapse before stream metadata loads and prevent
-			// resizing when the stream changes resolution (adaptive bitrate).
-			if (this.config.width) {
-				this.video.style.width = this.config.width;
-				// If width is in pixels, lock height too so both dimensions are fixed and
-				// the browser cannot reflow the element when video intrinsic size changes.
-				const pxMatch = String(this.config.width).match(/^(\d+(?:\.\d+)?)px$/i);
-				if (pxMatch) {
-					this.video.style.height = `${Math.round(parseFloat(pxMatch[1]) * 9 / 16)}px`;
-				}
-			}
-			this.video.style.aspectRatio = "16 / 9";
-			this.video.style.minWidth = "320px";
-			this.video.style.minHeight = "180px";
-			this.video.srcObject = this.stream;
-			this.video.play().catch((err) => Log.warn(`[MMM-Nest-Camera-WebRTC] Video playback failed: ${err.message}`));
+			cam.video = document.createElement("video");
+			cam.video.classList.add("rtw-video");
+			cam.video.autoplay = true;
+			cam.video.controls = false;
+			cam.video.volume = 1;
+			cam.video.muted = true;
+			cam.video.playsInline = true;
+			cam.video.srcObject = cam.stream;
+			cam.video.play().catch((err) => Log.warn(`[${this.name}] Video playback failed: ${err.message}`));
 
 			const recover = () => {
-				this.video.srcObject = this.stream;
-				this.video.play();
+				cam.video.srcObject = cam.stream;
+				cam.video.play().catch(() => {});
 			};
-			this.video.onstalled = recover;
-			this.video.onerror = recover;
+			cam.video.onstalled = recover;
+			cam.video.onerror = recover;
 
-			const canvas = document.createElement("canvas");
-			canvas.classList.add("rtw-equalizer");
-			canvas.width = 18;
-			canvas.height = 200;
-			this.equalizerCanvas = canvas;
+			cam.canvas = null;
+			cam.wrapper = document.createElement("div");
+			cam.wrapper.classList.add("rtw-wrapper");
+			cam.wrapper.appendChild(cam.video);
 
-			this.wrapper = document.createElement("div");
-			this.wrapper.classList.add("rtw-wrapper");
-			this.wrapper.appendChild(this.video);
-			this.wrapper.appendChild(canvas);
+			const label = document.createElement("div");
+			label.classList.add("rtw-label");
+			label.textContent = cam.name;
+			cam.wrapper.appendChild(label);
 
-			// Defer so the canvas is connected to the DOM before we start drawing
-			setTimeout(() => this.startAudioVisualizer(), 0);
-
-			return this.wrapper;
+			this._syncEqualizer(cameraId, isHero);
+			return cam.wrapper;
 		}
 
-		const error = document.createElement("div");
-		error.classList.add("rtw-error", "small");
-		error.innerHTML = "Connecting to Nest camera...";
-		return error;
+		const connecting = document.createElement("div");
+		connecting.classList.add("rtw-error", "small");
+		connecting.innerHTML = "Connecting to Nest camera...";
+		return this._stateTile(cameraId, connecting);
 	},
+
+	// Adds the equalizer canvas to the hero tile and removes it from demoted tiles,
+	// without recreating the <video> element.
+	_syncEqualizer(cameraId, isHero) {
+		const cam = this.cameras[cameraId];
+		if (!cam || !cam.wrapper) return;
+		if (isHero) {
+			if (!cam.canvas) {
+				const canvas = document.createElement("canvas");
+				canvas.classList.add("rtw-equalizer");
+				canvas.width = 18;
+				canvas.height = 200;
+				cam.canvas = canvas;
+				cam.wrapper.appendChild(canvas);
+				// Defer so the canvas is connected to the DOM before we start drawing
+				setTimeout(() => this.startAudioVisualizer(cameraId), 0);
+			}
+		} else if (cam.canvas) {
+			this.cleanupAudio(cameraId);
+			if (cam.canvas.parentNode) cam.canvas.parentNode.removeChild(cam.canvas);
+			cam.canvas = null;
+		}
+	},
+
+	// ---------------------------------------------------------------------------
+	// Notifications (MagicMirror inter-module)
+	// ---------------------------------------------------------------------------
 
 	async notificationReceived(notification, payload, sender) {
-		// Handle USER_PRESENCE events from the MMM-PIR-sensor/similar modules
-		if (notification === "USER_PRESENCE") {
-			if (payload) {
-				this.suspendedForUserPresence = false;
-				if (this.suspended && !this.hidden) {
-					await this.resume();
+		switch (notification) {
+			case "USER_PRESENCE":
+				// From MMM-PIR-sensor / similar — suspend the whole module when nobody's around
+				if (payload) {
+					this.suspendedForUserPresence = false;
+					if (this.suspended && !this.hidden) {
+						await this.resume();
+					}
+				} else {
+					this.suspendedForUserPresence = true;
+					if (!this.suspended) {
+						this.suspend();
+					}
 				}
-			} else {
-				this.suspendedForUserPresence = true;
-				if (!this.suspended) {
-					this.suspend();
+				break;
+			case "NEST_CAM_SET_HERO": {
+				const id = this.resolveCameraId(payload);
+				if (id) {
+					this.stopCycle();          // a manual pick sticks
+					this.setHero(id);
 				}
+				break;
 			}
+			case "NEST_CAM_NEXT":
+				this.stopCycle();
+				this.advanceHero(1);
+				break;
+			case "NEST_CAM_PREV":
+				this.stopCycle();
+				this.advanceHero(-1);
+				break;
+			case "NEST_CAM_PAUSE_CYCLE":
+				this.stopCycle();
+				break;
+			case "NEST_CAM_RESUME_CYCLE":
+				this.startCycle();
+				break;
 		}
 	},
 
+	// ---------------------------------------------------------------------------
+	// Socket notifications (frontend <-> node_helper)
+	// ---------------------------------------------------------------------------
+
 	async socketNotificationReceived(notification, payload) {
-		switch (notification) {
-			case `TOKEN_EXPIRED_${this.identifier}`:
-				this.tokenExpired = true;
-				this.cleanupConnection();
+		// Per-camera notifications carry a cameraId suffix (`${identifier}__${index}`).
+		// Account-level notifications carry the bare module identifier suffix.
+		for (const cameraId of this.cameraOrder) {
+			if (notification.endsWith(`_${cameraId}`)) {
+				const verb = notification.slice(0, notification.length - cameraId.length - 1);
+				await this.handleCameraNotification(verb, cameraId, payload);
+				return;
+			}
+		}
+		if (notification.endsWith(`_${this.identifier}`)) {
+			const verb = notification.slice(0, notification.length - this.identifier.length - 1);
+			await this.handleAccountNotification(verb, payload);
+		}
+	},
+
+	async handleAccountNotification(verb, payload) {
+		switch (verb) {
+			case "TOKEN":
+				this.token = payload.access_token;
+				this.refreshToken = payload.refresh_token || this.refreshToken;
+				this.tokenRequested = false;
+				this.needsAuth = false;
+				if (this.token) {
+					await this.initAllCameras();
+				}
 				this.updateDom();
 				break;
-			case `ANSWER_${this.identifier}`:
-				Log.log(`${this.name} received answer for ${this.identifier}`);
-				if (!this.pc) {
-					Log.warn(`${this.name} received answer but peer connection was closed`);
+			case "NEED_AUTH":
+				this.tokenRequested = false;
+				this.needsAuth = true;
+				this.authUrl = payload.authUrl;
+				this.updateDom();
+				break;
+		}
+	},
+
+	async handleCameraNotification(verb, cameraId, payload) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		switch (verb) {
+			case "ANSWER":
+				Log.log(`${this.name} received answer for ${cam.name}`);
+				if (!cam.pc) {
+					Log.warn(`${this.name} received answer but peer connection was closed (${cam.name})`);
 					break;
 				}
 				try {
@@ -332,77 +650,87 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					// Nest may return sendrecv in the answer; replace with sendonly
 					// to match our recvonly offer.
 					const patchedSdp = payload.replace(/\ba=sendrecv\b/g, "a=sendonly");
-					await this.pc.setRemoteDescription(
+					await cam.pc.setRemoteDescription(
 						new RTCSessionDescription({type: "answer", sdp: patchedSdp})
 					);
 					this.updateDom();
 				} catch (e) {
-					Log.warn(`${this.name} setRemoteDescription failed:`, e);
+					Log.warn(`${this.name} setRemoteDescription failed (${cam.name}):`, e);
 				}
 				break;
-			case `TOKEN_${this.identifier}`:
-				this.token = payload.access_token;
-				this.refreshToken = payload.refresh_token || this.refreshToken;
-				this.needsAuth = false;
-				if (payload.error !== "invalid_grant") {
-					await this.initializeRTCPeerConnection();
-				}
+			case "TOKEN_EXPIRED":
+				cam.tokenExpired = true;
+				this.cleanupConnection(cameraId);
 				this.updateDom();
 				break;
-			case `NEED_AUTH_${this.identifier}`:
-				this.needsAuth = true;
-				this.authUrl = payload.authUrl;
+			case "RECONNECT":
+				Log.log(`${this.name} session invalid; reconnecting ${cam.name}`);
+				this.cleanupConnection(cameraId);
+				await this.initializeRTCPeerConnection(cameraId);
 				this.updateDom();
 				break;
-			case `RECONNECT_${this.identifier}`:
-				Log.log(`${this.name} session invalid; reconnecting`);
-				this.cleanupConnection();
-				await this.initializeRTCPeerConnection();
-				this.updateDom();
-				break;
-			case `REFRESH_${this.identifier}`:
+			case "REFRESH":
 				this.token = payload.access_token;
 				if (payload.refresh_token) {
 					this.refreshToken = payload.refresh_token;
 				}
 				if (payload.retry) {
 					// Token was refreshed after START_STREAM failed; retry full connection
-					this.cleanupConnection();
-					await this.initializeRTCPeerConnection();
+					this.cleanupConnection(cameraId);
+					await this.initializeRTCPeerConnection(cameraId);
+					this.updateDom();
 				} else {
-					this.sendSocketNotification("EXTEND_STREAM", {
-						token: this.token,
-						identifier: this.identifier,
-						nestProjectId: this.config.nestProjectId,
-						nestDeviceId: this.config.nestDeviceId,
-						nestClientId: this.config.nestClientId,
-						nestClientSecret: this.config.nestClientSecret,
-						refreshToken: this.refreshToken
-					});
+					this.sendExtend(cameraId);
 				}
-				// Only update DOM when retrying (stream was cleared); skip for extend to avoid size flicker
-				if (payload.retry) this.updateDom();
 				break;
 		}
 	},
 
-	async initializeRTCPeerConnection() {
+	requestToken() {
+		if (this.tokenRequested || this.token) return;
+		this.tokenRequested = true;
+		const first = this.cameras[this.cameraOrder[0]];
+		this.sendSocketNotification("GET_TOKEN", {
+			nestClientId: first.config.nestClientId,
+			nestClientSecret: first.config.nestClientSecret,
+			nestCode: first.config.nestCode,
+			identifier: this.identifier
+		});
+	},
+
+	sendExtend(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		this.sendSocketNotification("EXTEND_STREAM", {
+			token: this.token,
+			identifier: cameraId,
+			nestProjectId: cam.config.nestProjectId,
+			nestDeviceId: cam.config.nestDeviceId,
+			nestClientId: cam.config.nestClientId,
+			nestClientSecret: cam.config.nestClientSecret,
+			refreshToken: this.refreshToken
+		});
+	},
+
+	// ---------------------------------------------------------------------------
+	// WebRTC (per camera)
+	// ---------------------------------------------------------------------------
+
+	async initializeRTCPeerConnection(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
 		if (this.suspended) return;
-		if (this.tokenExpired) return;
+		if (cam.tokenExpired) return;
+		if (cam.pc) return;                 // already connected/connecting
 		if (!this.token) {
-			this.sendSocketNotification("GET_TOKEN", {
-				nestClientId: this.config.nestClientId,
-				nestClientSecret: this.config.nestClientSecret,
-				nestCode: this.config.nestCode,
-				identifier: this.identifier
-			});
+			this.requestToken();            // shared account token, fetched once
 			return;
 		}
 
-		Log.log(`${this.name} initializing connection for ${this.identifier}`);
+		Log.log(`${this.name} initializing connection for ${cam.name} (${cameraId})`);
 
-		this.stream = new MediaStream();
-		this.pc = new RTCPeerConnection({
+		cam.stream = new MediaStream();
+		cam.pc = new RTCPeerConnection({
 			iceServers: [
 				{
 					urls: ["stun:stun.l.google.com:19302"]
@@ -411,107 +739,102 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			sdpSemantics: "unified-plan"
 		});
 
-		this.pc.onconnectionstatechange = () => {
+		cam.pc.onconnectionstatechange = () => {
 			if (this.suspended) return;
-			const state = this.pc.connectionState;
+			const state = cam.pc ? cam.pc.connectionState : "closed";
+			const delay = cam.config.reconnectDelay ?? 3000;
 			if (state === "failed") {
-				const delay = this.config.reconnectDelay ?? 3000;
-				Log.log(`${this.name} connection failed, reconnecting in ${delay}ms`);
-				this.cleanupConnection();
-				this.reconnectTimeout = setTimeout(() => {
-					this.reconnectTimeout = null;
-					this.initializeRTCPeerConnection();
+				Log.log(`${this.name} connection failed (${cam.name}), reconnecting in ${delay}ms`);
+				this.cleanupConnection(cameraId);
+				cam.reconnectTimeout = setTimeout(() => {
+					cam.reconnectTimeout = null;
+					this.initializeRTCPeerConnection(cameraId);
 				}, delay);
 			} else if (state === "disconnected") {
 				// "disconnected" can be transient — give it 15s to self-recover before forcing reconnect
-				if (!this.disconnectTimeout) {
-					Log.log(`${this.name} connection disconnected, will force reconnect in 15s if not recovered`);
-					this.disconnectTimeout = setTimeout(() => {
-						this.disconnectTimeout = null;
-						if (this.pc && this.pc.connectionState === "disconnected" && !this.suspended) {
-							Log.log(`${this.name} connection still disconnected, forcing reconnect`);
-							this.cleanupConnection();
-							this.initializeRTCPeerConnection();
+				if (!cam.disconnectTimeout) {
+					Log.log(`${this.name} connection disconnected (${cam.name}), will force reconnect in 15s if not recovered`);
+					cam.disconnectTimeout = setTimeout(() => {
+						cam.disconnectTimeout = null;
+						if (cam.pc && cam.pc.connectionState === "disconnected" && !this.suspended) {
+							Log.log(`${this.name} connection still disconnected (${cam.name}), forcing reconnect`);
+							this.cleanupConnection(cameraId);
+							this.initializeRTCPeerConnection(cameraId);
 						}
 					}, 15000);
 				}
 			} else if (state === "connected") {
 				// Self-recovered from disconnected — cancel the pending forced reconnect
-				if (this.disconnectTimeout) {
-					clearTimeout(this.disconnectTimeout);
-					this.disconnectTimeout = null;
+				if (cam.disconnectTimeout) {
+					clearTimeout(cam.disconnectTimeout);
+					cam.disconnectTimeout = null;
 				}
 			}
 		};
 
-		this.pc.ontrack = (event) => {
-			this.stream.addTrack(event.track);
+		cam.pc.ontrack = (event) => {
+			cam.stream.addTrack(event.track);
 			if (event.track.kind === "video") {
 				event.track.onmute = () => {
-					this.noSignal = true;
-					this.startNoSignalRetry();
+					cam.noSignal = true;
+					this.startNoSignalRetry(cameraId);
 					this.updateDom();
 				};
 				event.track.onunmute = () => {
-					this.noSignal = false;
-					this.stopNoSignalRetry();
+					cam.noSignal = false;
+					this.stopNoSignalRetry(cameraId);
 					this.updateDom();
 				};
-				this.noSignal = event.track.muted;
-				if (this.noSignal) this.startNoSignalRetry();
+				cam.noSignal = event.track.muted;
+				if (cam.noSignal) this.startNoSignalRetry(cameraId);
 				this.updateDom();
 			} else if (event.track.kind === "audio") {
-				// Audio may arrive after the DOM is already built; start visualizer if canvas is ready
-				setTimeout(() => this.startAudioVisualizer(), 0);
+				// Audio may arrive after the DOM is already built; start visualizer if this is the hero
+				setTimeout(() => this.startAudioVisualizer(cameraId), 0);
 			}
 		};
 
-		const pingChannel = this.pc.createDataChannel("ping");
-		let intervalId;
+		const pingChannel = cam.pc.createDataChannel("ping");
 		pingChannel.onopen = () => {
-			const interval = this.config.extendInterval ?? 240000;
-			intervalId = setInterval(() => {
+			const interval = cam.config.extendInterval ?? 240000;
+			cam.pingIntervalId = setInterval(() => {
 				try {
-					this.sendSocketNotification("EXTEND_STREAM", {
-						token: this.token,
-						identifier: this.identifier,
-						nestProjectId: this.config.nestProjectId,
-						nestDeviceId: this.config.nestDeviceId,
-						nestClientId: this.config.nestClientId,
-						nestClientSecret: this.config.nestClientSecret,
-						refreshToken: this.refreshToken,
-					});
+					this.sendExtend(cameraId);
 				} catch (e) {
-					Log.warn(`${this.name} EXTEND_STREAM notification failed:`, e);
+					Log.warn(`${this.name} EXTEND_STREAM notification failed (${cam.name}):`, e);
 				}
 			}, interval);
 		};
 		pingChannel.onclose = () => {
-			clearInterval(intervalId);
+			if (cam.pingIntervalId) {
+				clearInterval(cam.pingIntervalId);
+				cam.pingIntervalId = null;
+			}
 			if (this.suspended) return;
-			const delay = this.config.reconnectDelay ?? 3000;
-			Log.log(`${this.name} ping channel closed; reconnecting in ${delay}ms`);
-			this.cleanupConnection();
-			this.reconnectTimeout = setTimeout(() => {
-				this.reconnectTimeout = null;
-				this.initializeRTCPeerConnection();
+			const delay = cam.config.reconnectDelay ?? 3000;
+			Log.log(`${this.name} ping channel closed (${cam.name}); reconnecting in ${delay}ms`);
+			this.cleanupConnection(cameraId);
+			cam.reconnectTimeout = setTimeout(() => {
+				cam.reconnectTimeout = null;
+				this.initializeRTCPeerConnection(cameraId);
 			}, delay);
 		};
 
-		this.pc.addTransceiver("audio", {direction: "recvonly"});
-		this.pc.addTransceiver("video", {direction: "recvonly"});
-		this.pc.onnegotiationneeded = async () => {
-			const offer = await this.pc.createOffer();
-			await this.pc.setLocalDescription(offer);
+		cam.pc.addTransceiver("audio", {direction: "recvonly"});
+		cam.pc.addTransceiver("video", {direction: "recvonly"});
+		cam.pc.onnegotiationneeded = async () => {
+			if (!cam.pc) return;
+			const offer = await cam.pc.createOffer();
+			await cam.pc.setLocalDescription(offer);
 
 			this.sendSocketNotification("START_STREAM", {
 				token: this.token,
-				sdp: this.pc.localDescription.sdp,
-				identifier: this.identifier,
-				nestProjectId: this.config.nestProjectId,
-				nestDeviceId: this.config.nestDeviceId,
-				nestClientId: this.config.nestClientId,
-				nestClientSecret: this.config.nestClientSecret,
+				sdp: cam.pc.localDescription.sdp,
+				identifier: cameraId,
+				nestProjectId: cam.config.nestProjectId,
+				nestDeviceId: cam.config.nestDeviceId,
+				nestClientId: cam.config.nestClientId,
+				nestClientSecret: cam.config.nestClientSecret,
 				refreshToken: this.refreshToken
 			});
 		};

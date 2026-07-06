@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0] – 2026-07-05
+
+### Added
+- **Multi-camera support.** A single module instance can now drive multiple Nest cameras via a `cameras: [...]` array (shared account credentials at the top level, per-camera `name` + `nestDeviceId`).
+- **Hero + thumbnails layout** (`layout: "hero"`, the default): one large primary camera with a strip of smaller live thumbnails.
+- **Auto-cycle** (`cycleInterval`): automatically rotates which camera is the hero on an interval, without tearing down any stream.
+- **Notification API** to control the hero camera from other modules (e.g. MMM-Remote-Control): `NEST_CAM_SET_HERO`, `NEST_CAM_NEXT`, `NEST_CAM_PREV`, `NEST_CAM_PAUSE_CYCLE`, `NEST_CAM_RESUME_CYCLE`.
+- Per-camera connection isolation: a failure/reconnect on one camera no longer affects its siblings.
+- Camera name overlay label on each tile.
+- Pluggable `layout` option with `grid` / `carousel` / `focus` reserved for a future release (they currently fall back to `hero`).
+
+### Changed
+- Internal WebRTC state and socket notifications are now namespaced per camera (`cameraId = ${identifier}__${index}`) instead of per module instance. The audio equalizer now renders on the hero camera only.
+- Token/OAuth flow remains shared across all cameras (one Google account = one `tokens.json`); concurrent token fetches are de-duped.
+
+### Compatibility
+- **Existing single-camera configs keep working unchanged** — a top-level `nestDeviceId` (with no `cameras` array) is treated as a one-camera setup.
+
 ## [1.0.0] – 2026-03-24
 
 ### Added

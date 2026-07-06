@@ -5,7 +5,11 @@ const fs = require("fs");
 
 const Log = require("logger");
 
-/** Per-instance media session IDs (keyed by identifier) for multi-camera support */
+/**
+ * Media session IDs keyed by the caller's `identifier`. For a single-camera
+ * instance that is the module identifier; for multi-camera it is the per-camera
+ * cameraId (`${moduleIdentifier}__${index}`), so each camera gets its own slot.
+ */
 const mediaSessionIds = {};
 
 const getTokensPath = () => path.join(__dirname, "tokens.json");
@@ -59,7 +63,34 @@ module.exports = NodeHelper.create({
 		}
 	},
 
+	// All cameras share one Google account / one tokens.json. De-dupe concurrent
+	// GET_TOKEN calls onto a single in-flight fetch, then reply to each caller's
+	// identifier so N cameras never trigger N parallel OAuth refreshes.
 	async getNestToken(payload) {
+		if (this._tokenInFlight) {
+			const result = await this._tokenInFlight;
+			this.sendTokenResult(payload.identifier, result);
+			return;
+		}
+		this._tokenInFlight = this.resolveToken(payload);
+		let result;
+		try {
+			result = await this._tokenInFlight;
+		} finally {
+			this._tokenInFlight = null;
+		}
+		this.sendTokenResult(payload.identifier, result);
+	},
+
+	sendTokenResult(identifier, result) {
+		if (result.kind === "TOKEN") {
+			this.sendSocketNotification(`TOKEN_${identifier}`, result.tokens);
+		} else {
+			this.sendSocketNotification(`NEED_AUTH_${identifier}`, { authUrl: result.authUrl });
+		}
+	},
+
+	async resolveToken(payload) {
 		// 1. Try to load saved tokens and refresh if we have refresh_token
 		let tokens = loadTokens();
 		if (tokens?.refresh_token) {
@@ -72,8 +103,7 @@ module.exports = NodeHelper.create({
 				const newTokens = { ...tokens, access_token: refreshed.access_token };
 				if (refreshed.refresh_token) newTokens.refresh_token = refreshed.refresh_token;
 				saveTokens(newTokens);
-				this.sendSocketNotification(`TOKEN_${payload.identifier}`, newTokens);
-				return;
+				return { kind: "TOKEN", tokens: newTokens };
 			}
 		}
 
@@ -86,22 +116,21 @@ module.exports = NodeHelper.create({
 					refresh_token: resBody.refresh_token || tokens?.refresh_token
 				};
 				saveTokens(newTokens);
-				this.sendSocketNotification(`TOKEN_${payload.identifier}`, newTokens);
-				return;
+				return { kind: "TOKEN", tokens: newTokens };
 			}
 			Log.error(`Code exchange failed: ${JSON.stringify(resBody)}`);
 		}
 
 		// 3. Use saved access_token if we have one (e.g. no refresh_token yet)
 		if (tokens?.access_token) {
-			this.sendSocketNotification(`TOKEN_${payload.identifier}`, tokens);
-			return;
+			return { kind: "TOKEN", tokens };
 		}
 
 		// 4. No valid tokens and no nestCode (or exchange failed)
-		this.sendSocketNotification(`NEED_AUTH_${payload.identifier}`, {
+		return {
+			kind: "NEED_AUTH",
 			authUrl: `https://accounts.google.com/o/oauth2/v2/auth?client_id=${payload.nestClientId}&redirect_uri=https://www.google.com&response_type=code&scope=https://www.googleapis.com/auth/sdm.service&access_type=offline&prompt=consent`
-		});
+		};
 	},
 
 	async sendOffer(payload) {

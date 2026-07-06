@@ -2,7 +2,44 @@
   display: inline-block;
 }
 
+/* ---------------------------------------------------------------------------
+   Layout roots
+   Sizing is driven by CSS custom properties (--hero-width / --thumb-width) set
+   from config in getDom(), so promoting/demoting a camera is a pure re-parent
+   with no inline-style churn and no <video> teardown.
+   --------------------------------------------------------------------------- */
+.rtw-root {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* Hero layout: one large camera above a row of thumbnails */
+.rtw-hero {
+  display: flex;
+}
+
+.rtw-thumbs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Grid layout scaffolding (render branch lands in Phase 3) */
+.rtw-layout-grid .rtw-root,
+.rtw-root.rtw-layout-grid {
+  display: grid;
+  grid-auto-flow: row;
+  gap: 8px;
+}
+
+/* ---------------------------------------------------------------------------
+   Camera tile
+   --------------------------------------------------------------------------- */
 .rtw-wrapper {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: stretch;
@@ -12,15 +49,34 @@
 .rtw-video {
   display: block;
   width: 100%;
-  min-width: 320px;
-  min-height: 180px;
+  min-width: 160px;
   aspect-ratio: 16 / 9;
   object-fit: contain;
 }
 
-.region .rtw-video {
-  width: 640px;
-  height: 360px;
+/* Hero/thumbnail sizing wins over the base rule (higher specificity via .rtw-root) */
+.rtw-root .rtw-hero .rtw-video,
+.rtw-root .rtw-hero .rtw-dark-screen {
+  width: var(--hero-width, 33%);
+}
+
+.rtw-root .rtw-thumbs .rtw-video,
+.rtw-root .rtw-thumbs .rtw-dark-screen {
+  width: var(--thumb-width, 15%);
+  min-width: 120px;
+}
+
+/* Camera name overlay */
+.rtw-label {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  font-size: 0.7em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 .rtw-equalizer {
@@ -38,8 +94,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 320px;
-  min-height: 180px;
+  width: 100%;
+  min-width: 160px;
   aspect-ratio: 16 / 9;
   background: rgba(10, 10, 10, 0.9);
   color: #fff;

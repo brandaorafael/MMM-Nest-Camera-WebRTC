@@ -1,6 +1,6 @@
 # MMM-Nest-Camera-WebRTC
 
-A [MagicMirror²](https://github.com/MichMich/MagicMirror) module that displays a live WebRTC stream from a Google Nest camera via the Device Access API. Includes an audio frequency visualizer synced to the camera's audio track.
+A [MagicMirror²](https://github.com/MichMich/MagicMirror) module that displays live WebRTC streams from one or more Google Nest cameras via the Device Access API. Supports a **hero + thumbnails** layout with auto-cycling and remote-controllable camera switching. Includes an audio frequency visualizer synced to the hero camera's audio track.
 
 ![MMM-Nest-Camera-WebRTC preview](screenshots/preview.png)
 
@@ -98,15 +98,71 @@ The device ID is the last segment of the `name` field, e.g. `enterprises/project
 
 | Option | Default | Description |
 |---|---|---|
-| `nestProjectId` | `""` | **Required.** Your Device Access project ID. |
-| `nestDeviceId` | `""` | **Required.** The Nest camera device ID. |
-| `nestClientId` | `""` | **Required.** OAuth 2.0 client ID from Google Cloud Console. |
-| `nestClientSecret` | `""` | **Required.** OAuth 2.0 client secret from Google Cloud Console. |
+| `nestProjectId` | `""` | **Required.** Your Device Access project ID. Shared by all cameras. |
+| `nestClientId` | `""` | **Required.** OAuth 2.0 client ID from Google Cloud Console. Shared by all cameras. |
+| `nestClientSecret` | `""` | **Required.** OAuth 2.0 client secret from Google Cloud Console. Shared by all cameras. |
+| `nestDeviceId` | `""` | Single-camera setups: the Nest camera device ID. Ignored when `cameras` is set. |
+| `cameras` | `[]` | Multi-camera setups: an array of `{ name, nestDeviceId }` objects (see [Multi-Camera](#multi-camera)). |
+| `layout` | `"hero"` | Layout mode. `"hero"` = one large camera + thumbnail strip. `"grid"` / `"carousel"` / `"focus"` are reserved for a future release and currently fall back to `hero`. |
+| `cycleInterval` | `0` | Milliseconds between automatic hero-camera rotations. `0` disables auto-cycling. |
+| `heroWidth` | `null` | CSS width of the hero camera (e.g. `"33%"`, `"640px"`). Falls back to `width`. |
+| `thumbWidth` | `"15%"` | CSS width of each thumbnail camera. |
+| `width` | `"33%"` | CSS width of the video element for single-camera setups / hero fallback. |
 | `nestCode` | `""` | One-time OAuth authorization code. Set this before first run, then clear it after `tokens.json` is written — or pass the code directly to `exchange-nest-code.js` instead. |
-| `width` | `"33%"` | CSS width of the video element (e.g. `"33%"`, `"480px"`). |
-| `reconnectDelay` | `3000` | Milliseconds to wait before reconnecting after a connection failure. |
-| `extendInterval` | `240000` | Interval (ms) at which the stream session is extended. Nest sessions expire after 5 minutes; this must be less than `300000`. |
+| `reconnectDelay` | `3000` | Milliseconds to wait before reconnecting after a connection failure. Can be overridden per-camera. |
+| `extendInterval` | `240000` | Interval (ms) at which the stream session is extended. Nest sessions expire after 5 minutes; this must be less than `300000`. Can be overridden per-camera. |
 | `hiddenOnStartup` | `false` | When `true`, defers the WebRTC connection until the module is made visible (e.g. by a `SHOW_MODULE` notification). |
+
+---
+
+## Multi-Camera
+
+To show multiple cameras, put the shared account credentials at the top level and list each camera in the `cameras` array. Every camera uses the same Google account / OAuth credentials, so you only authenticate once.
+
+```javascript
+{
+  module: "MMM-Nest-Camera-WebRTC",
+  position: "bottom_left",
+  config: {
+    // Shared account credentials
+    nestProjectId: "your-project-id",
+    nestClientId: "your-oauth-client-id",
+    nestClientSecret: "your-oauth-client-secret",
+
+    // Layout + behaviour
+    layout: "hero",
+    cycleInterval: 15000,   // rotate the hero camera every 15s (0 = off)
+    heroWidth: "40%",
+    thumbWidth: "18%",
+
+    cameras: [
+      { name: "Front Door", nestDeviceId: "AVPHwEu...front" },
+      { name: "Backyard",   nestDeviceId: "AVPHwEu...back" },
+      { name: "Garage",     nestDeviceId: "AVPHwEu...garage" }
+    ]
+  }
+}
+```
+
+Each camera entry accepts `name`, `nestDeviceId`, and optional per-camera overrides for `extendInterval` and `reconnectDelay`. Get each device's ID with the curl command in [Getting your Device ID](#getting-your-device-id).
+
+> **Backward compatible:** an existing single-camera config that uses a top-level `nestDeviceId` (and no `cameras` array) keeps working exactly as before.
+
+### Controlling the hero camera (notifications)
+
+The module reacts to these MagicMirror notifications, so any other module — e.g. [MMM-Remote-Control](https://github.com/Jopyth/MMM-Remote-Control), driven from your phone's browser — can switch cameras. This is handy since the mirror may have no touchscreen.
+
+| Notification | Payload | Effect |
+|---|---|---|
+| `NEST_CAM_SET_HERO` | camera `name`, index (number), or `cameraId` | Promotes that camera to the hero spot and pauses auto-cycling. |
+| `NEST_CAM_NEXT` | — | Advances the hero to the next camera; pauses auto-cycling. |
+| `NEST_CAM_PREV` | — | Advances the hero to the previous camera; pauses auto-cycling. |
+| `NEST_CAM_PAUSE_CYCLE` | — | Stops auto-cycling. |
+| `NEST_CAM_RESUME_CYCLE` | — | Restarts auto-cycling (respects `cycleInterval`). |
+
+With MMM-Remote-Control you can map a custom menu button to send, for example, `NEST_CAM_SET_HERO` with payload `"Front Door"`.
+
+> **Performance note (Raspberry Pi):** every configured camera streams live simultaneously, and each is a hardware H.264 decode. A Pi can comfortably handle 2 streams; 3–4 concurrent 1080p streams may exceed the GPU's simultaneous-decode budget and cause stutter or dropped frames. Test on your hardware and, if needed, reduce the number of cameras or lower stream resolution. Motion-driven focus and keeping only the hero live are planned to ease this (see `MULTI-CAMERA.md`).
 
 ---
 
