@@ -663,6 +663,15 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.cleanupConnection(cameraId);
 				this.updateDom();
 				break;
+			case "STREAM_UNAVAILABLE":
+				// Camera is offline / not currently streamable (e.g. 400 FAILED_PRECONDITION).
+				// Show "No Signal" and let the 30s retry loop recover it when it comes back.
+				Log.log(`${this.name} ${cam.name} not available for streaming; will retry`);
+				this.cleanupConnection(cameraId);
+				cam.noSignal = true;
+				this.startNoSignalRetry(cameraId);
+				this.updateDom();
+				break;
 			case "RECONNECT":
 				Log.log(`${this.name} session invalid; reconnecting ${cam.name}`);
 				this.cleanupConnection(cameraId);

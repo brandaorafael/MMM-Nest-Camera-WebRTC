@@ -186,6 +186,10 @@ module.exports = NodeHelper.create({
 					Log.error(`Token refresh failed: ${JSON.stringify(refreshBody)}`);
 					this.sendSocketNotification(`TOKEN_EXPIRED_${payload.identifier}`, {});
 				}
+			} else {
+				// Camera offline / not currently streamable (e.g. 400 FAILED_PRECONDITION).
+				// Frontend shows "No Signal" and retries on its 30s loop.
+				this.sendSocketNotification(`STREAM_UNAVAILABLE_${payload.identifier}`, {});
 			}
 			return;
 		}
