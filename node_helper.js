@@ -284,6 +284,9 @@ module.exports = NodeHelper.create({
 			case "GET_TOKEN":
 				await this.getNestToken(payload);
 				break;
+			case "CLIENT_LOG":
+				Log.info(`[${this.name}] ${payload.msg}`);
+				break;
 		}
 	}
 });

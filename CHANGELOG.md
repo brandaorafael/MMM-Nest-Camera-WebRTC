@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Per-camera connection isolation: a failure/reconnect on one camera no longer affects its siblings.
 - Hero selection and auto-cycle skip offline / "No Signal" cameras, so a dead feed never occupies the hero spot; the hero hands off to a live camera when its current one drops.
 - Frozen-video self-healing: a per-camera watchdog polls the decoded-frame counter and reconnects a camera whose video stalls (~21s with no new frames) even though its WebRTC track still reports "live" — no more manual MagicMirror restart to unstick a frozen feed.
+- Fixed the most common freeze cause: re-rendering detaches each `<video>`, which pauses it in Chromium; cached tiles are now resumed on reuse and by the watchdog, so tiles no longer stick on a stale frame. Self-healing actions are logged to `magicmirror.log`.
 - Camera name overlay label on each tile.
 - Pluggable `layout` option with `grid` / `carousel` / `focus` reserved for a future release (they currently fall back to `hero`).
 

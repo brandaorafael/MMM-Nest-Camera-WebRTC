@@ -49,6 +49,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.startStallWatch();
 	},
 
+	// Relay a message to node_helper so it lands in magicmirror.log — frontend
+	// Log.* only reaches the renderer console, so self-healing actions would
+	// otherwise be invisible on the Pi.
+	serverLog(msg) {
+		this.sendSocketNotification("CLIENT_LOG", { msg });
+	},
+
 	// ---------------------------------------------------------------------------
 	// Frozen-video watchdog
 	//
@@ -92,6 +99,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				cam.stallCount = 0;
 				continue;
 			}
+			// A tile paused by DOM re-parenting keeps decoding frames but shows a
+			// frozen image — resume it. (Frame-count stall detection below handles a
+			// genuinely dead decoder, which no play() can fix.)
+			if (v.paused) {
+				this.serverLog(`${cam.name} video was paused; resuming`);
+				v.play().catch(() => {});
+			}
 			const frames = this.decodedFrames(v);
 			if (frames > cam.lastFrames) {
 				cam.lastFrames = frames;
@@ -100,7 +114,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				// It was rendering frames and has now stopped — count consecutive stalls.
 				cam.stallCount++;
 				if (cam.stallCount >= STALL_LIMIT) {
-					Log.warn(`${this.name} ${cam.name} video frozen (no new frames); reconnecting`);
+					this.serverLog(`${cam.name} video frozen (no new frames); reconnecting`);
 					cam.stallCount = 0;
 					cam.lastFrames = 0;
 					this.cleanupConnection(cameraId);
@@ -577,6 +591,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			// Moving the cached <video> between the hero and thumbnail containers keeps
 			// it playing; only the equalizer needs to follow the hero.
 			if (cam.wrapper && cam.video && cam.video.srcObject === cam.stream) {
+				// Re-parenting a <video> during re-render detaches it from the document,
+				// which pauses it in Chromium and freezes the tile on a stale frame.
+				// Resume it whenever we hand back the cached tile.
+				if (cam.video.paused) cam.video.play().catch(() => {});
 				this._syncEqualizer(cameraId, isHero);
 				return cam.wrapper;
 			}
