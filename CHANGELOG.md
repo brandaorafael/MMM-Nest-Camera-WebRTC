@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Notification API** to control the hero camera from other modules (e.g. MMM-Remote-Control): `NEST_CAM_SET_HERO`, `NEST_CAM_NEXT`, `NEST_CAM_PREV`, `NEST_CAM_PAUSE_CYCLE`, `NEST_CAM_RESUME_CYCLE`.
 - Per-camera connection isolation: a failure/reconnect on one camera no longer affects its siblings.
 - Hero selection and auto-cycle skip offline / "No Signal" cameras, so a dead feed never occupies the hero spot; the hero hands off to a live camera when its current one drops.
+- Frozen-video self-healing: a per-camera watchdog polls the decoded-frame counter and reconnects a camera whose video stalls (~21s with no new frames) even though its WebRTC track still reports "live" — no more manual MagicMirror restart to unstick a frozen feed.
 - Camera name overlay label on each tile.
 - Pluggable `layout` option with `grid` / `carousel` / `focus` reserved for a future release (they currently fall back to `hero`).
 

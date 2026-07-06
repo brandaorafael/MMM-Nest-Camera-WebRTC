@@ -46,6 +46,69 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 		await this.initAllCameras();
 		this.startCycle();
+		this.startStallWatch();
+	},
+
+	// ---------------------------------------------------------------------------
+	// Frozen-video watchdog
+	//
+	// A WebRTC video can stall (decoder freezes in Electron) while the track still
+	// reports "live"/unmuted, so mute-based No-Signal detection misses it. We watch
+	// the decoded-frame counter: if a connected camera stops producing new frames
+	// for ~STALL_LIMIT checks, we reconnect just that camera — self-healing without
+	// restarting MagicMirror.
+	// ---------------------------------------------------------------------------
+
+	startStallWatch() {
+		if (this._stallTimer) clearInterval(this._stallTimer);
+		this._stallTimer = setInterval(() => this.checkStalls(), 7000);
+	},
+
+	stopStallWatch() {
+		if (this._stallTimer) {
+			clearInterval(this._stallTimer);
+			this._stallTimer = null;
+		}
+	},
+
+	decodedFrames(video) {
+		try {
+			if (typeof video.getVideoPlaybackQuality === "function") {
+				return video.getVideoPlaybackQuality().totalVideoFrames || 0;
+			}
+		} catch (e) { /* ignore */ }
+		return video.webkitDecodedFrameCount || 0;
+	},
+
+	checkStalls() {
+		if (this.suspended) return;
+		const STALL_LIMIT = 3; // 3 × 7s ≈ 21s with no new frames → treat as frozen
+		for (const cameraId of this.cameraOrder) {
+			const cam = this.cameras[cameraId];
+			const v = cam.video;
+			const playing = cam.pc && cam.pc.connectionState === "connected"
+				&& cam.stream && !cam.noSignal && v && v.videoWidth > 0;
+			if (!playing) {
+				cam.stallCount = 0;
+				continue;
+			}
+			const frames = this.decodedFrames(v);
+			if (frames > cam.lastFrames) {
+				cam.lastFrames = frames;
+				cam.stallCount = 0;
+			} else if (cam.lastFrames > 0) {
+				// It was rendering frames and has now stopped — count consecutive stalls.
+				cam.stallCount++;
+				if (cam.stallCount >= STALL_LIMIT) {
+					Log.warn(`${this.name} ${cam.name} video frozen (no new frames); reconnecting`);
+					cam.stallCount = 0;
+					cam.lastFrames = 0;
+					this.cleanupConnection(cameraId);
+					if (this.heroId === cameraId) this.ensureViewableHero();
+					this.initializeRTCPeerConnection(cameraId);
+				}
+			}
+		}
 	},
 
 	// ---------------------------------------------------------------------------
@@ -115,6 +178,9 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			// True while we tear the connection down on purpose, so the ping
 			// channel's onclose doesn't schedule a competing reconnect.
 			deliberateClose: false,
+			// Frozen-video watchdog: last decoded-frame count and consecutive stalls.
+			lastFrames: 0,
+			stallCount: 0,
 			// Audio visualizer (hero only)
 			audioCtx: null,
 			analyser: null,
@@ -153,6 +219,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	stop() {
 		this.stopCycle();
+		this.stopStallWatch();
 		this.cleanupAllCameras();
 	},
 
@@ -767,6 +834,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 		Log.log(`${this.name} initializing connection for ${cam.name} (${cameraId})`);
 		cam.deliberateClose = false;
+		cam.lastFrames = 0;
+		cam.stallCount = 0;
 
 		cam.stream = new MediaStream();
 		cam.pc = new RTCPeerConnection({
