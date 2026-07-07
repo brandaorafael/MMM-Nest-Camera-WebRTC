@@ -162,6 +162,31 @@ The module reacts to these MagicMirror notifications, so any other module — e.
 
 With MMM-Remote-Control you can map a custom menu button to send, for example, `NEST_CAM_SET_HERO` with payload `"Front Door"`.
 
+### Keyboard / wireless-remote control
+
+Any device that emits key presses — a USB/Bluetooth wireless numpad, a presentation clicker, or a mini keyboard plugged into the Pi — controls the hero camera directly, with **no extra module or driver**. The module listens for key presses in the display:
+
+| Key | Effect |
+|---|---|
+| `1`–`9` | Focus that camera (1 = first camera) and pause auto-cycle |
+| `→` / `↓` / `PageDown` / `n` | Next camera |
+| `←` / `↑` / `PageUp` / `p` | Previous camera |
+| `Space` | Toggle auto-cycle on/off |
+
+This is the simplest hands-on option for a wall-mounted mirror: pair a cheap wireless remote and you can flip cameras from across the room.
+
+### Web control page (self-hosted)
+
+The module hosts its own mobile-friendly control page on MagicMirror's built-in web server at:
+
+```
+http://<pi-ip>:8080/nest-cam
+```
+
+Open it on your phone to tap any camera to the hero spot, step Prev/Next, or pause/resume auto-cycling. The page shows each camera's live status (hero / available / No Signal) and needs no additional module.
+
+> **⚠️ Network exposure:** by default MagicMirror binds to `localhost` with an `ipWhitelist` of loopback only, so this page is reachable **only from the Pi itself**. To open it on your phone you must set `address: "0.0.0.0"` and widen `ipWhitelist` (e.g. your LAN subnet) in `config/config.js`. Doing so exposes the **entire mirror UI, including live camera feeds,** to every allowed IP on your network — only do this on a trusted LAN.
+
 > **Performance note (Raspberry Pi):** every configured camera streams live simultaneously, and each is a hardware H.264 decode. A Pi can comfortably handle 2 streams; 3–4 concurrent 1080p streams may exceed the GPU's simultaneous-decode budget and cause stutter or dropped frames. Test on your hardware and, if needed, reduce the number of cameras or lower stream resolution. Motion-driven focus and keeping only the hero live are planned to ease this (see `MULTI-CAMERA.md`).
 
 ---

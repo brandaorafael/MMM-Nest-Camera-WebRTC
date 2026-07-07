@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.1.0] – 2026-07-07
+
+### Added
+- **Keyboard / wireless-remote control.** The module now listens for key presses in the display, so any USB/Bluetooth numpad, presentation clicker, or mini keyboard plugged into the Pi can drive the hero camera — no extra module or driver. `1`–`9` focus a camera, arrows/PageUp-Down step Prev/Next, `Space` toggles auto-cycle.
+- **Self-hosted web control page** at `http://<pi>:8080/nest-cam`, served by the module's `node_helper` on MagicMirror's own Express server (no MMM-Remote-Control dependency). Mobile-friendly buttons tap a camera to hero, step Prev/Next, and pause/resume auto-cycle; each camera shows live hero / available / No Signal status. The page is gated by MagicMirror's `ipWhitelist` and is only reachable off-Pi if `address` binds beyond localhost.
+- Unified `applyControl()` path: the keyboard, the web page, and the `NEST_CAM_*` inter-module notifications now all funnel through one method, so every input source behaves identically.
+
+### Notes
+- Camera names rendered on the web page are HTML-escaped.
+- The web page only reaches your phone after you open `address`/`ipWhitelist` in `config/config.js`, which also exposes the rest of the mirror UI to your LAN — see the README security note.
+
 ## [2.0.0] – 2026-07-05
 
 ### Added

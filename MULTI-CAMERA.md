@@ -98,19 +98,35 @@ tile and torn down when a camera is demoted.
 
 ## Actions
 
+All input sources funnel through a single `applyControl(action, target)` method
+(`action` ∈ `set|next|prev|pause|resume|toggle-cycle`), so they behave identically
+and stay in sync. After each action the frontend pushes a `CONTROL_STATE` snapshot to
+`node_helper` (roster + hero + cycle state) for the web control page.
+
 - **Auto-cycle** (`cycleInterval`): `startCycle()`/`advanceHero()`/`setHero()`.
   `setHero` just sets `this.heroId` and `updateDom()`; all cameras stay live.
 - **Notification-driven** (for remotes / MMM-Remote-Control): `NEST_CAM_SET_HERO`,
-  `NEST_CAM_NEXT/PREV`, `NEST_CAM_PAUSE_CYCLE/RESUME_CYCLE`. A manual pick pauses
-  auto-cycle so it sticks.
+  `NEST_CAM_NEXT/PREV`, `NEST_CAM_PAUSE_CYCLE/RESUME_CYCLE` → `applyControl`.
+  A manual pick pauses auto-cycle so it sticks.
+- **Keyboard / wireless remote** (Phase 2, implemented): `startInputControl()`
+  registers a `keydown` listener in the renderer. `1`–`9` → focus camera N,
+  arrows/PageUp-Down → prev/next, `Space` → toggle cycle. Works with any USB/BT
+  device that emits keystrokes (numpad, clicker, mini keyboard) — no driver.
+- **Self-hosted web page** (Phase 2, implemented): `node_helper` registers
+  `/nest-cam` (HTML), `/nest-cam/state` (JSON roster the page polls every 2s), and
+  `/nest-cam/cmd` (relays a button press as a `CONTROL_CMD` socket notification →
+  `applyControl` on the matching instance) on MagicMirror's Express server
+  (`this.expressApp`). Gated by MM's `ipWhitelist`; only reachable off-Pi when
+  `address` binds beyond localhost.
 
 ## Roadmap (phases)
 
-- **Phase 1 (this release):** multi-camera core, `cameraId` keying, hero layout,
+- **Phase 1:** multi-camera core, `cameraId` keying, hero layout,
   auto-cycle, notification API, backend token de-dupe. Per-camera connection
   isolation (one camera failing never tears down siblings).
-- **Phase 2:** wire up an input method on the Pi — add **MMM-Remote-Control** so the
-  hero can be switched from a phone browser (no touchscreen hardware needed).
+- **Phase 2 (this release):** input methods on the Pi — keyboard/wireless-remote
+  control and a self-hosted `/nest-cam` web control page, both routed through
+  `applyControl`. (MMM-Remote-Control still works too, via the notification API.)
 - **Phase 3:** implement the `grid` / `carousel` / `focus` layout render branches
   (CSS scaffolding already exists).
 - **Phase 4:** **motion-driven focus** — subscribe to SDM camera events

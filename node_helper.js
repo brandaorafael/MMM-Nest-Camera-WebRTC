@@ -30,6 +30,123 @@ function saveTokens(tokens) {
 module.exports = NodeHelper.create({
 	start() {
 		Log.info(`Starting node_helper for module [${this.name}]`);
+		// Latest control state per module instance (pushed by the frontend), so the
+		// self-hosted web control page can render live camera buttons.
+		this.controlStates = {};
+		this.setupControlServer();
+	},
+
+	// Register the web control page + command endpoints on MagicMirror's own
+	// Express server (this.expressApp is set before start()). Reachable at
+	// http://<pi>:8080/nest-cam — but only from IPs allowed by the config
+	// `ipWhitelist`, and only if `address` binds beyond localhost.
+	setupControlServer() {
+		const app = this.expressApp;
+		if (!app) {
+			Log.warn(`[${this.name}] expressApp unavailable; web control page disabled`);
+			return;
+		}
+
+		app.get("/nest-cam", (req, res) => {
+			res.set("Content-Type", "text/html; charset=utf-8");
+			res.send(this.controlPageHtml());
+		});
+
+		// Current roster/hero/cycle state for all instances (page polls this).
+		app.get("/nest-cam/state", (req, res) => {
+			res.json({ instances: Object.values(this.controlStates) });
+		});
+
+		// A button press → relayed to the frontend as CONTROL_CMD.
+		app.get("/nest-cam/cmd", (req, res) => {
+			const { id, action, target } = req.query;
+			if (!id || !action) {
+				res.status(400).json({ ok: false, error: "id and action required" });
+				return;
+			}
+			this.sendSocketNotification("CONTROL_CMD", { identifier: id, action, target });
+			res.json({ ok: true });
+		});
+
+		Log.info(`[${this.name}] web control page available at /nest-cam`);
+	},
+
+	controlPageHtml() {
+		return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Nest Cameras</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:#0d0f12; color:#e8eaed; padding:16px; }
+  h1 { font-size:18px; font-weight:600; margin:4px 0 16px; letter-spacing:.02em; }
+  .inst { margin-bottom:28px; }
+  .row { display:flex; gap:10px; margin-bottom:12px; }
+  .cams { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  button { font:inherit; color:inherit; border:1px solid #2a2f36; background:#171a1f;
+           border-radius:14px; padding:16px; cursor:pointer; transition:transform .06s, background .15s; }
+  button:active { transform:scale(.97); }
+  .row button { flex:1; font-weight:600; font-size:16px; }
+  .cam { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-height:76px; text-align:left; }
+  .cam .n { font-size:16px; font-weight:600; }
+  .cam .s { font-size:12px; opacity:.6; }
+  .cam.hero { background:#12331f; border-color:#2e7d4f; }
+  .cam.hero .s { color:#5fd08a; opacity:1; }
+  .cam.off { opacity:.45; }
+  .cam.off .s { color:#e0774a; opacity:1; }
+  .wide { width:100%; margin-top:12px; font-weight:600; font-size:15px; }
+  .muted { opacity:.5; font-size:13px; }
+</style>
+</head>
+<body>
+<h1>🎥 Nest Cameras</h1>
+<div id="app" class="muted">Loading…</div>
+<script>
+  function cmd(id, action, target) {
+    var q = "/nest-cam/cmd?id=" + encodeURIComponent(id) + "&action=" + action +
+            (target != null ? "&target=" + target : "");
+    fetch(q).then(function(){ setTimeout(refresh, 150); });
+  }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]; }); }
+  function renderInstance(s) {
+    var cams = s.cameras.map(function(c){
+      var cls = "cam" + (c.isHero ? " hero" : "") + (c.viewable ? "" : " off");
+      var status = c.isHero ? "● LIVE — hero" : (c.viewable ? "tap to focus" : "No Signal");
+      return '<button class="' + cls + '" onclick="cmd(\\''+s.identifier+'\\',\\'set\\','+c.index+')">' +
+             '<span class="n">' + esc(c.name) + '</span>' +
+             '<span class="s">' + status + '</span></button>';
+    }).join("");
+    var cycle = s.cycleConfigured
+      ? '<button class="wide" onclick="cmd(\\''+s.identifier+'\\',\\''+(s.cyclePaused?"resume":"pause")+'\\')">' +
+        (s.cyclePaused ? "▶ Resume auto-cycle" : "⏸ Pause auto-cycle") + '</button>'
+      : "";
+    return '<div class="inst">' +
+      '<div class="row">' +
+        '<button onclick="cmd(\\''+s.identifier+'\\',\\'prev\\')">◀ Prev</button>' +
+        '<button onclick="cmd(\\''+s.identifier+'\\',\\'next\\')">Next ▶</button>' +
+      '</div>' +
+      '<div class="cams">' + cams + '</div>' + cycle +
+    '</div>';
+  }
+  function refresh() {
+    fetch("/nest-cam/state").then(function(r){ return r.json(); }).then(function(data){
+      var insts = (data && data.instances) || [];
+      var app = document.getElementById("app");
+      if (!insts.length) { app.className = "muted"; app.textContent = "Waiting for MagicMirror…"; return; }
+      app.className = "";
+      app.innerHTML = insts.map(renderInstance).join("");
+    }).catch(function(){});
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>`;
 	},
 
 	async exchangeCodeForTokens(payload) {
@@ -286,6 +403,10 @@ module.exports = NodeHelper.create({
 				break;
 			case "CLIENT_LOG":
 				Log.info(`[${this.name}] ${payload.msg}`);
+				break;
+			case "CONTROL_STATE":
+				// Frontend pushed its latest roster/hero/cycle state for the web page.
+				this.controlStates[payload.identifier] = payload;
 				break;
 		}
 	}

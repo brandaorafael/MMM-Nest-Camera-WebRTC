@@ -38,15 +38,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.suspendedForUserPresence = false;
 
 		this.normalizeCameras();
+		this.startInputControl();   // keyboard / wireless-remote control (always listening)
 
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
 			this.suspended = true;
+			this.pushControlState();
 			return;
 		}
 		await this.initAllCameras();
 		this.startCycle();
 		this.startStallWatch();
+		this.pushControlState();
 	},
 
 	// Relay a message to node_helper so it lands in magicmirror.log — frontend
@@ -234,6 +237,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	stop() {
 		this.stopCycle();
 		this.stopStallWatch();
+		this.stopInputControl();
 		this.cleanupAllCameras();
 	},
 
@@ -481,6 +485,107 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	},
 
 	// ---------------------------------------------------------------------------
+	// Input control (keyboard / wireless remote / self-hosted web page)
+	//
+	// Every input source — the physical keyboard/remote, the web control page
+	// (node_helper → CONTROL_CMD), and the inter-module NEST_CAM_* notifications —
+	// funnels through applyControl() so they all behave identically.
+	// ---------------------------------------------------------------------------
+
+	applyControl(action, target) {
+		switch (action) {
+			case "next":
+				this.stopCycle();        // a manual pick sticks; resume re-enables cycling
+				this.advanceHero(1);
+				break;
+			case "prev":
+				this.stopCycle();
+				this.advanceHero(-1);
+				break;
+			case "set": {
+				const id = this.resolveCameraId(target);
+				if (id) {
+					this.stopCycle();
+					this.setHero(id);
+				}
+				break;
+			}
+			case "pause":
+				this.stopCycle();
+				break;
+			case "resume":
+				this.startCycle();
+				break;
+			case "toggle-cycle":
+				if (this.cycleTimer) this.stopCycle();
+				else this.startCycle();
+				break;
+			default:
+				return;
+		}
+		this.pushControlState();
+	},
+
+	// A physical keyboard, wireless numpad, or presentation clicker plugged into
+	// the Pi shows up as keydown events in the Electron renderer. No extra module
+	// or driver needed. Number keys jump to a camera; arrows/PageUp-Down cycle;
+	// space toggles auto-cycle.
+	startInputControl() {
+		if (this._keyHandler) return;
+		this._keyHandler = (e) => {
+			let handled = true;
+			switch (e.key) {
+				case "ArrowRight":
+				case "ArrowDown":
+				case "PageDown":
+				case "n":
+					this.applyControl("next");
+					break;
+				case "ArrowLeft":
+				case "ArrowUp":
+				case "PageUp":
+				case "p":
+					this.applyControl("prev");
+					break;
+				case " ":
+				case "Spacebar":
+					this.applyControl("toggle-cycle");
+					break;
+				default:
+					// Keys 1-9 → focus that camera (1 = first camera)
+					if (/^[1-9]$/.test(e.key)) this.applyControl("set", parseInt(e.key, 10) - 1);
+					else handled = false;
+			}
+			if (handled) e.preventDefault();
+		};
+		document.addEventListener("keydown", this._keyHandler);
+	},
+
+	stopInputControl() {
+		if (this._keyHandler) {
+			document.removeEventListener("keydown", this._keyHandler);
+			this._keyHandler = null;
+		}
+	},
+
+	// Push the current roster + hero + cycle state to node_helper, which serves it
+	// to the web control page (/nest-cam) so the page can render live buttons.
+	pushControlState() {
+		this.sendSocketNotification("CONTROL_STATE", {
+			identifier: this.identifier,
+			moduleName: this.name,
+			cyclePaused: !this.cycleTimer,
+			cycleConfigured: (this.config.cycleInterval > 0) && (this.cameraOrder.length > 1),
+			cameras: this.cameraOrder.map((id, i) => ({
+				index: i,
+				name: this.cameras[id].name,
+				viewable: this.isViewable(id),
+				isHero: id === this.heroId
+			}))
+		});
+	},
+
+	// ---------------------------------------------------------------------------
 	// DOM / layout
 	// ---------------------------------------------------------------------------
 
@@ -681,27 +786,20 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					}
 				}
 				break;
-			case "NEST_CAM_SET_HERO": {
-				const id = this.resolveCameraId(payload);
-				if (id) {
-					this.stopCycle();          // a manual pick sticks
-					this.setHero(id);
-				}
+			case "NEST_CAM_SET_HERO":
+				this.applyControl("set", payload);
 				break;
-			}
 			case "NEST_CAM_NEXT":
-				this.stopCycle();
-				this.advanceHero(1);
+				this.applyControl("next");
 				break;
 			case "NEST_CAM_PREV":
-				this.stopCycle();
-				this.advanceHero(-1);
+				this.applyControl("prev");
 				break;
 			case "NEST_CAM_PAUSE_CYCLE":
-				this.stopCycle();
+				this.applyControl("pause");
 				break;
 			case "NEST_CAM_RESUME_CYCLE":
-				this.startCycle();
+				this.applyControl("resume");
 				break;
 		}
 	},
@@ -711,6 +809,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	// ---------------------------------------------------------------------------
 
 	async socketNotificationReceived(notification, payload) {
+		// Web control page relays commands through node_helper as CONTROL_CMD.
+		// It's broadcast to every instance of this module, so ignore commands
+		// addressed to a different instance.
+		if (notification === "CONTROL_CMD") {
+			if (payload && payload.identifier === this.identifier) {
+				let target = payload.target;
+				if (typeof target === "string" && /^\d+$/.test(target)) target = parseInt(target, 10);
+				this.applyControl(payload.action, target);
+			}
+			return;
+		}
+
 		// Per-camera notifications carry a cameraId suffix (`${identifier}__${index}`).
 		// Account-level notifications carry the bare module identifier suffix.
 		for (const cameraId of this.cameraOrder) {
@@ -766,6 +876,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 						new RTCSessionDescription({type: "answer", sdp: patchedSdp})
 					);
 					this.updateDom();
+					this.pushControlState();
 				} catch (e) {
 					Log.warn(`${this.name} setRemoteDescription failed (${cam.name}):`, e);
 				}
@@ -775,6 +886,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.cleanupConnection(cameraId);
 				if (this.heroId === cameraId) this.ensureViewableHero();
 				this.updateDom();
+				this.pushControlState();
 				break;
 			case "STREAM_UNAVAILABLE":
 				// Camera is offline / not currently streamable (e.g. 400 FAILED_PRECONDITION).
@@ -785,6 +897,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.startNoSignalRetry(cameraId);
 				if (this.heroId === cameraId) this.ensureViewableHero();
 				this.updateDom();
+				this.pushControlState();
 				break;
 			case "RECONNECT":
 				Log.log(`${this.name} session invalid; reconnecting ${cam.name}`);
@@ -906,17 +1019,20 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					this.startNoSignalRetry(cameraId);
 					if (this.heroId === cameraId) this.ensureViewableHero();
 					this.updateDom();
+					this.pushControlState();
 				};
 				event.track.onunmute = () => {
 					cam.noSignal = false;
 					this.stopNoSignalRetry(cameraId);
 					this.ensureViewableHero();
 					this.updateDom();
+					this.pushControlState();
 				};
 				cam.noSignal = event.track.muted;
 				if (cam.noSignal) this.startNoSignalRetry(cameraId);
 				else this.ensureViewableHero();
 				this.updateDom();
+				this.pushControlState();
 			} else if (event.track.kind === "audio") {
 				// Audio may arrive after the DOM is already built; start visualizer if this is the hero
 				setTimeout(() => this.startAudioVisualizer(cameraId), 0);
