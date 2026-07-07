@@ -1,6 +1,6 @@
 {
   "name": "mmm-nest-camera-webrtc",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Module to display live WebRTC streams from one or more Nest cameras on MagicMirror",
   "main": "MMM-Nest-Camera-WebRTC.js",
   "repository": {
@@ -16,6 +16,7 @@
   "keywords": ["magicmirror", "magicmirror2", "magicmirror-module", "nest", "camera", "webrtc", "google", "smart-home"],
   "engines": { "node": ">=18.0.0" },
   "dependencies": {
-    "node-fetch": "^2.6.1"
+    "node-fetch": "^2.6.1",
+    "@google-cloud/pubsub": "^4.0.0"
   }
 }

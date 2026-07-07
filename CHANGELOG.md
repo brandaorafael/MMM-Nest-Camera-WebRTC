@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.2.0] – 2026-07-07
+
+### Added
+- **Motion-driven auto-focus.** With `enableMotionFocus` and a Google Cloud Pub/Sub subscription configured, the module receives Nest camera events (motion, person, doorbell chime) in real time and reacts:
+  - **In auto-cycle mode**, the camera that triggered is promoted to hero for `motionHoldMs` (default 20s), then auto-cycle resumes.
+  - **"Manual wins":** if you've manually picked a camera (keyboard/web/notification), motion never steals the hero — it only **flags the thumbnail** with a pulsing ring + corner icon (amber 🏃 for motion/person, red 🔔 for a doorbell), which fades after `motionHoldMs`.
+- `node_helper` pulls events via `@google-cloud/pubsub` using a service-account key (`pubsubKeyFile`), classifies each event, and relays `NEST_EVENT{deviceId, kind}` to the frontend, which maps the device to its camera.
+- New config: `enableMotionFocus`, `pubsubSubscription`, `pubsubKeyFile`, `motionHoldMs`.
+- **[`MOTION-EVENTS-SETUP.md`](MOTION-EVENTS-SETUP.md)** — full step-by-step for the one-time Google Cloud / Device Access Pub/Sub setup, with a troubleshooting table for the common errors.
+
+### Notes
+- All existing features work **without** any of this — motion focus is off unless `enableMotionFocus` is set and Pub/Sub is configured.
+- Sound-only and clip-preview-only events are ignored; a doorbell chime takes priority over motion in the same update.
+
 ## [2.1.0] – 2026-07-07
 
 ### Added

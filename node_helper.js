@@ -390,10 +390,94 @@ module.exports = NodeHelper.create({
 		}
 	},
 
+	// ---------------------------------------------------------------------------
+	// Motion/doorbell events (Google Cloud Pub/Sub) — see MOTION-EVENTS-SETUP.md
+	// ---------------------------------------------------------------------------
+
+	// Classify a raw SDM Pub/Sub message body into { deviceId, kind } or null.
+	// Pure function (no I/O) so it can be unit-tested. Exposed on the helper.
+	classifyEvent(body) {
+		const ru = body && body.resourceUpdate;
+		if (!ru || !ru.name || !ru.events) return null;
+		const deviceId = ru.name.split("/devices/")[1];
+		if (!deviceId) return null;
+		const types = Object.keys(ru.events);
+		let kind = null;
+		if (types.some((t) => t.includes("DoorbellChime"))) kind = "doorbell";
+		else if (types.some((t) => t.includes("CameraMotion") || t.includes("CameraPerson"))) kind = "motion";
+		if (!kind) return null;   // ignore Sound / ClipPreview-only updates
+		return { deviceId, kind };
+	},
+
+	handleEventMessage(message) {
+		let body;
+		try {
+			body = JSON.parse(message.data.toString());
+		} catch (e) {
+			return;
+		}
+		const evt = this.classifyEvent(body);
+		if (evt) {
+			// Broadcast to all module instances; each frontend keeps only events for
+			// a device it owns.
+			this.sendSocketNotification("NEST_EVENT", evt);
+		}
+	},
+
+	async initEvents(payload) {
+		if (!payload || !payload.subscription || !payload.keyFile) return;
+		this._eventSubs = this._eventSubs || {};
+		if (this._eventSubs[payload.subscription]) return;   // already listening
+
+		let PubSub;
+		try {
+			({ PubSub } = require("@google-cloud/pubsub"));
+		} catch (e) {
+			Log.error(`[${this.name}] @google-cloud/pubsub not installed — run 'npm install' in the module folder. Motion events disabled.`);
+			return;
+		}
+
+		const keyPath = path.join(__dirname, payload.keyFile);
+		if (!fs.existsSync(keyPath)) {
+			Log.error(`[${this.name}] Pub/Sub key file not found: ${keyPath}. Motion events disabled.`);
+			return;
+		}
+
+		let subscription;
+		try {
+			const pubsub = new PubSub({ keyFilename: keyPath });
+			// Accept either a full resource path or a bare subscription id in config.
+			const subId = payload.subscription.includes("/")
+				? payload.subscription.split("/").pop()
+				: payload.subscription;
+			subscription = pubsub.subscription(subId);
+		} catch (e) {
+			Log.error(`[${this.name}] Pub/Sub init failed: ${e.message}`);
+			return;
+		}
+
+		subscription.on("message", (message) => {
+			try {
+				this.handleEventMessage(message);
+			} finally {
+				message.ack();
+			}
+		});
+		subscription.on("error", (err) => {
+			Log.error(`[${this.name}] Pub/Sub subscription error: ${err.message}`);
+		});
+
+		this._eventSubs[payload.subscription] = subscription;
+		Log.info(`[${this.name}] listening for Nest events on ${payload.subscription}`);
+	},
+
 	async socketNotificationReceived(notification, payload) {
 		switch (notification) {
 			case "START_STREAM":
 				await this.sendOffer(payload);
+				break;
+			case "INIT_EVENTS":
+				await this.initEvents(payload);
 				break;
 			case "EXTEND_STREAM":
 				await this.extendStream(payload);

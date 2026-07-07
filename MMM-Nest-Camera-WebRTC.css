@@ -88,6 +88,42 @@
   background: transparent;
 }
 
+/* ---------------------------------------------------------------------------
+   Motion / doorbell event flag: pulsing ring + corner icon on the tile.
+   Amber for motion/person, red for a doorbell chime. Applied to .rtw-wrapper.
+   --------------------------------------------------------------------------- */
+.rtw-event-motion .rtw-video {
+  animation: rtw-pulse-motion 1.2s ease-in-out infinite;
+  border-radius: 3px;
+}
+
+.rtw-event-doorbell .rtw-video {
+  animation: rtw-pulse-doorbell 0.9s ease-in-out infinite;
+  border-radius: 3px;
+}
+
+@keyframes rtw-pulse-motion {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 179, 0, 0.9), 0 0 6px 2px rgba(255, 179, 0, 0.4); }
+  50%      { box-shadow: 0 0 0 3px rgba(255, 179, 0, 1), 0 0 16px 5px rgba(255, 179, 0, 0.7); }
+}
+
+@keyframes rtw-pulse-doorbell {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 45, 45, 0.9), 0 0 6px 2px rgba(255, 45, 45, 0.4); }
+  50%      { box-shadow: 0 0 0 3px rgba(255, 45, 45, 1), 0 0 18px 6px rgba(255, 45, 45, 0.8); }
+}
+
+.rtw-event-icon {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 0.85em;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
 .rtw-error {}
 
 .rtw-dark-screen {

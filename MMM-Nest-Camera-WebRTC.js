@@ -15,6 +15,12 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		heroWidth: null,        // falls back to `width`
 		thumbWidth: "15%",
 
+		// Motion-driven auto-focus (optional; requires Google Cloud Pub/Sub — see MOTION-EVENTS-SETUP.md)
+		enableMotionFocus: false,
+		pubsubSubscription: "",  // e.g. "projects/<gcp-project>/subscriptions/nest-events-sub"
+		pubsubKeyFile: "",       // service-account JSON, relative to the module folder
+		motionHoldMs: 20000,     // keep the triggered camera as hero / flag its thumbnail this long
+
 		reconnectDelay: 3000,
 		extendInterval: 240000  // must be < 300000 (Nest sessions expire at 5 min)
 	},
@@ -36,9 +42,14 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.cycleTimer = null;
 		this.suspended = false;
 		this.suspendedForUserPresence = false;
+		// True once the user takes manual control (keyboard/web/notification); while
+		// true, motion events flag thumbnails but never steal the hero. Reset on resume.
+		this.manualPinned = false;
+		this.motionResumeTimer = null;
 
 		this.normalizeCameras();
 		this.startInputControl();   // keyboard / wireless-remote control (always listening)
+		this.startEventStream();    // motion/doorbell auto-focus (if enabled + configured)
 
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
@@ -198,6 +209,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			// Frozen-video watchdog: last decoded-frame count and consecutive stalls.
 			lastFrames: 0,
 			stallCount: 0,
+			// Motion/doorbell event flag (thumbnail ring + corner icon)
+			eventFlag: null,        // null | 'motion' | 'doorbell'
+			eventFlagTimer: null,
+			eventIconEl: null,
 			// Audio visualizer (hero only)
 			audioCtx: null,
 			analyser: null,
@@ -238,6 +253,14 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.stopCycle();
 		this.stopStallWatch();
 		this.stopInputControl();
+		if (this.motionResumeTimer) {
+			clearTimeout(this.motionResumeTimer);
+			this.motionResumeTimer = null;
+		}
+		for (const id of this.cameraOrder) {
+			const cam = this.cameras[id];
+			if (cam.eventFlagTimer) { clearTimeout(cam.eventFlagTimer); cam.eventFlagTimer = null; }
+		}
 		this.cleanupAllCameras();
 	},
 
@@ -272,6 +295,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		}
 		cam.canvas = null;
 		cam.wrapper = null;
+		cam.eventIconEl = null;   // wrapper is gone; icon will be rebuilt on next render
 		cam.noSignal = false;
 		this.stopNoSignalRetry(cameraId);
 	},
@@ -495,35 +519,51 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 	applyControl(action, target) {
 		switch (action) {
 			case "next":
-				this.stopCycle();        // a manual pick sticks; resume re-enables cycling
+				this.pinManual();        // a manual pick sticks; resume re-enables cycling
 				this.advanceHero(1);
 				break;
 			case "prev":
-				this.stopCycle();
+				this.pinManual();
 				this.advanceHero(-1);
 				break;
 			case "set": {
 				const id = this.resolveCameraId(target);
 				if (id) {
-					this.stopCycle();
+					this.pinManual();
 					this.setHero(id);
 				}
 				break;
 			}
 			case "pause":
-				this.stopCycle();
+				this.pinManual();
 				break;
 			case "resume":
+				this.releaseManual();
 				this.startCycle();
 				break;
 			case "toggle-cycle":
-				if (this.cycleTimer) this.stopCycle();
-				else this.startCycle();
+				if (this.cycleTimer) { this.pinManual(); }
+				else { this.releaseManual(); this.startCycle(); }
 				break;
 			default:
 				return;
 		}
 		this.pushControlState();
+	},
+
+	// Enter manual control: stop auto-cycle and cancel any pending motion hold so
+	// motion events flag thumbnails without stealing the hero.
+	pinManual() {
+		this.manualPinned = true;
+		this.stopCycle();
+		if (this.motionResumeTimer) {
+			clearTimeout(this.motionResumeTimer);
+			this.motionResumeTimer = null;
+		}
+	},
+
+	releaseManual() {
+		this.manualPinned = false;
 	},
 
 	// A physical keyboard, wireless numpad, or presentation clicker plugged into
@@ -583,6 +623,80 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				isHero: id === this.heroId
 			}))
 		});
+	},
+
+	// ---------------------------------------------------------------------------
+	// Motion-driven auto-focus (optional; Google Cloud Pub/Sub events)
+	//
+	// node_helper pulls SDM camera events and relays them as NEST_EVENT{deviceId,kind}.
+	// "Manual wins": if the user has pinned a camera, motion only flags the thumbnail
+	// (pulsing ring + corner icon) and never steals the hero. In auto-cycle mode, the
+	// triggered camera is promoted to hero for motionHoldMs, then auto-cycle resumes.
+	// ---------------------------------------------------------------------------
+
+	startEventStream() {
+		if (!this.config.enableMotionFocus) return;
+		if (!this.config.pubsubSubscription || !this.config.pubsubKeyFile) {
+			Log.warn(`${this.name} enableMotionFocus is on but pubsubSubscription/pubsubKeyFile are not set`);
+			return;
+		}
+		this.sendSocketNotification("INIT_EVENTS", {
+			subscription: this.config.pubsubSubscription,
+			keyFile: this.config.pubsubKeyFile
+		});
+	},
+
+	handleMotionEvent(cameraId, kind) {
+		const cam = this.cameras[cameraId];
+		if (!cam) return;
+		const hold = this.config.motionHoldMs || 20000;
+
+		// 1. Flag the thumbnail (always — even under manual control, so you notice).
+		cam.eventFlag = (kind === "doorbell") ? "doorbell" : "motion";
+		if (cam.eventFlagTimer) clearTimeout(cam.eventFlagTimer);
+		cam.eventFlagTimer = setTimeout(() => {
+			cam.eventFlag = null;
+			cam.eventFlagTimer = null;
+			this.updateDom();
+			this.pushControlState();
+		}, hold);
+
+		this.serverLog(`${kind} event on ${cam.name}${this.manualPinned ? " (flagged; manual focus active)" : " (auto-focusing)"}`);
+
+		// 2. Auto-focus only in auto-cycle mode and only if the camera can display.
+		if (!this.manualPinned && this.isViewable(cameraId)) {
+			this.stopCycle();               // hold the triggered camera as hero…
+			this.setHero(cameraId);
+			if (this.motionResumeTimer) clearTimeout(this.motionResumeTimer);
+			this.motionResumeTimer = setTimeout(() => {
+				this.motionResumeTimer = null;
+				if (!this.manualPinned) this.startCycle();   // …then resume cycling
+			}, hold);
+		}
+
+		this.updateDom();
+		this.pushControlState();
+	},
+
+	// Adds/removes the event ring class + corner icon on a camera's live tile,
+	// mirroring cam.eventFlag. Called from renderCameraTile (fresh + reuse paths).
+	_syncEventFlag(cameraId) {
+		const cam = this.cameras[cameraId];
+		if (!cam || !cam.wrapper) return;
+		const w = cam.wrapper;
+		w.classList.remove("rtw-event-motion", "rtw-event-doorbell");
+		if (cam.eventIconEl && cam.eventIconEl.parentNode) {
+			cam.eventIconEl.parentNode.removeChild(cam.eventIconEl);
+		}
+		cam.eventIconEl = null;
+		if (cam.eventFlag) {
+			w.classList.add(cam.eventFlag === "doorbell" ? "rtw-event-doorbell" : "rtw-event-motion");
+			const icon = document.createElement("div");
+			icon.classList.add("rtw-event-icon");
+			icon.textContent = cam.eventFlag === "doorbell" ? "🔔" : "🏃";
+			w.appendChild(icon);
+			cam.eventIconEl = icon;
+		}
 	},
 
 	// ---------------------------------------------------------------------------
@@ -701,6 +815,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				// Resume it whenever we hand back the cached tile.
 				if (cam.video.paused) cam.video.play().catch(() => {});
 				this._syncEqualizer(cameraId, isHero);
+				this._syncEventFlag(cameraId);
 				return cam.wrapper;
 			}
 
@@ -734,6 +849,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			cam.wrapper.appendChild(label);
 
 			this._syncEqualizer(cameraId, isHero);
+			this._syncEventFlag(cameraId);
 			return cam.wrapper;
 		}
 
@@ -817,6 +933,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				let target = payload.target;
 				if (typeof target === "string" && /^\d+$/.test(target)) target = parseInt(target, 10);
 				this.applyControl(payload.action, target);
+			}
+			return;
+		}
+
+		// Nest motion/doorbell event (broadcast to all instances); handle it if the
+		// event's device belongs to one of this instance's cameras.
+		if (notification === "NEST_EVENT") {
+			if (payload && payload.deviceId) {
+				const cameraId = this.cameraOrder.find(
+					(id) => this.cameras[id].config.nestDeviceId === payload.deviceId
+				);
+				if (cameraId) this.handleMotionEvent(cameraId, payload.kind);
 			}
 			return;
 		}
