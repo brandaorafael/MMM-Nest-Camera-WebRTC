@@ -189,7 +189,11 @@ Open it on your phone to tap any camera to the hero spot, step Prev/Next, or pau
 
 ### Motion-driven auto-focus (optional)
 
-The module can automatically promote the camera that detects motion, a person, or a doorbell press to the hero spot, then hand back to the auto-cycle after a hold. This needs a one-time Google Cloud Pub/Sub setup — see **[`MOTION-EVENTS-SETUP.md`](MOTION-EVENTS-SETUP.md)** for the full step-by-step (topic, publisher grant, subscription, service-account key). All other features work without it.
+The module can automatically promote the camera that detects motion, a person, or a doorbell press to the hero spot, then hand back to the auto-cycle after a hold (`motionHoldMs`). This needs a one-time Google Cloud Pub/Sub setup — see **[`MOTION-EVENTS-SETUP.md`](MOTION-EVENTS-SETUP.md)** for the full step-by-step (topic, publisher grant, subscription, service-account key). All other features work without it.
+
+- **"Manual wins":** if you've manually focused a camera, a motion event never steals the hero — it only flags that camera's thumbnail with a pulsing ring + badge (amber `● PERSON`/`● MOTION`, red `● DOORBELL`). In auto-cycle mode the triggered camera becomes the hero for `motionHoldMs`.
+- **Nest throttles events.** You will *not* get a focus on every movement — Nest emits motion/person events sparsely (often minutes apart), so treat this as "surface the camera when something notable happens," not a live motion tracker. The **doorbell** chime is the most reliable trigger.
+- **Verify your setup without waiting:** the `/nest-cam` web page has **Test motion flag** / **Test doorbell flag** buttons that render the flag on demand.
 
 > **Performance note (Raspberry Pi):** every configured camera streams live simultaneously, and each is a hardware H.264 decode. A Pi can comfortably handle 2 streams; 3–4 concurrent 1080p streams may exceed the GPU's simultaneous-decode budget and cause stutter or dropped frames. Test on your hardware and, if needed, reduce the number of cameras or lower stream resolution. Motion-driven focus and keeping only the hero live are planned to ease this (see `MULTI-CAMERA.md`).
 

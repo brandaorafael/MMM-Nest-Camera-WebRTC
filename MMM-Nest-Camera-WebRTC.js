@@ -209,8 +209,9 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			// Frozen-video watchdog: last decoded-frame count and consecutive stalls.
 			lastFrames: 0,
 			stallCount: 0,
-			// Motion/doorbell event flag (thumbnail ring + corner icon)
+			// Motion/doorbell event flag (thumbnail ring + text badge)
 			eventFlag: null,        // null | 'motion' | 'doorbell'
+			eventLabel: null,       // 'PERSON' | 'MOTION' | 'DOORBELL'
 			eventFlagTimer: null,
 			eventIconEl: null,
 			// Audio visualizer (hero only)
@@ -646,16 +647,18 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		});
 	},
 
-	handleMotionEvent(cameraId, kind) {
+	handleMotionEvent(cameraId, kind, label) {
 		const cam = this.cameras[cameraId];
 		if (!cam) return;
 		const hold = this.config.motionHoldMs || 20000;
 
 		// 1. Flag the thumbnail (always — even under manual control, so you notice).
 		cam.eventFlag = (kind === "doorbell") ? "doorbell" : "motion";
+		cam.eventLabel = label || (kind === "doorbell" ? "DOORBELL" : "MOTION");
 		if (cam.eventFlagTimer) clearTimeout(cam.eventFlagTimer);
 		cam.eventFlagTimer = setTimeout(() => {
 			cam.eventFlag = null;
+			cam.eventLabel = null;
 			cam.eventFlagTimer = null;
 			this.updateDom();
 			this.pushControlState();
@@ -678,8 +681,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.pushControlState();
 	},
 
-	// Adds/removes the event ring class + corner icon on a camera's live tile,
+	// Adds/removes the event ring class + text badge on a camera's live tile,
 	// mirroring cam.eventFlag. Called from renderCameraTile (fresh + reuse paths).
+	// Uses a text badge (not an emoji) — the Pi's Electron has no colour-emoji font,
+	// so 🏃/🔔 render as tofu boxes.
 	_syncEventFlag(cameraId) {
 		const cam = this.cameras[cameraId];
 		if (!cam || !cam.wrapper) return;
@@ -691,11 +696,12 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		cam.eventIconEl = null;
 		if (cam.eventFlag) {
 			w.classList.add(cam.eventFlag === "doorbell" ? "rtw-event-doorbell" : "rtw-event-motion");
-			const icon = document.createElement("div");
-			icon.classList.add("rtw-event-icon");
-			icon.textContent = cam.eventFlag === "doorbell" ? "🔔" : "🏃";
-			w.appendChild(icon);
-			cam.eventIconEl = icon;
+			const badge = document.createElement("div");
+			badge.classList.add("rtw-event-badge");
+			// filled dot (● U+25CF renders everywhere) + uppercase label, no emoji
+			badge.textContent = `● ${cam.eventLabel || (cam.eventFlag === "doorbell" ? "DOORBELL" : "MOTION")}`;
+			w.appendChild(badge);
+			cam.eventIconEl = badge;
 		}
 	},
 
@@ -932,7 +938,17 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			if (payload && payload.identifier === this.identifier) {
 				let target = payload.target;
 				if (typeof target === "string" && /^\d+$/.test(target)) target = parseInt(target, 10);
-				this.applyControl(payload.action, target);
+				// Setup helper: simulate a motion/doorbell event so you can verify the
+				// flag renders without waiting for Nest (which throttles real events).
+				if (payload.action === "test-motion" || payload.action === "test-doorbell") {
+					const cid = this.resolveCameraId(target != null ? target : this.heroId);
+					if (cid) {
+						const doorbell = payload.action === "test-doorbell";
+						this.handleMotionEvent(cid, doorbell ? "doorbell" : "motion", doorbell ? "DOORBELL" : "TEST");
+					}
+				} else {
+					this.applyControl(payload.action, target);
+				}
 			}
 			return;
 		}
@@ -944,7 +960,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				const cameraId = this.cameraOrder.find(
 					(id) => this.cameras[id].config.nestDeviceId === payload.deviceId
 				);
-				if (cameraId) this.handleMotionEvent(cameraId, payload.kind);
+				if (cameraId) this.handleMotionEvent(cameraId, payload.kind, payload.label);
 			}
 			return;
 		}

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.2.1] – 2026-07-07
+
+### Fixed
+- **Event flag is now readable.** The corner icon used emoji (🏃/🔔), which render as "tofu" boxes in the Pi's Electron (no colour-emoji font). Replaced with a glyph-safe text badge (`● PERSON` / `● MOTION` / `● DOORBELL`).
+- **Made the flag unmistakable.** The motion/doorbell ring is now a thick, brightly pulsing border (amber / red) with a blinking badge, so a rare event stands out against the semi-transparent mirror overlay.
+
+### Added
+- **`Test motion flag` / `Test doorbell flag` buttons** on the `/nest-cam` web page (and `test-motion` / `test-doorbell` commands), so you can verify the flag renders without waiting for a real Nest event.
+- `node_helper` logs every received Pub/Sub event (`Pub/Sub event <device> types=[…]`) to `magicmirror.log`, making the true event cadence observable.
+- Event payloads now carry a display `label` (PERSON / MOTION / DOORBELL) distinct from the behavioural `kind`.
+
+### Note
+- **Nest throttles camera events.** Motion/person events arrive sparsely (not one per movement) — the doorbell chime is the most reliable trigger. This feature surfaces the camera *when Nest reports something*, it is not a continuous motion tracker.
+
 ## [2.2.0] – 2026-07-07
 
 ### Added

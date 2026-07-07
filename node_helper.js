@@ -99,6 +99,8 @@ module.exports = NodeHelper.create({
   .cam.off { opacity:.45; }
   .cam.off .s { color:#e0774a; opacity:1; }
   .wide { width:100%; margin-top:12px; font-weight:600; font-size:15px; }
+  .row.test { margin-top:10px; }
+  .row.test button { font-weight:500; font-size:13px; opacity:.8; background:#12161c; }
   .muted { opacity:.5; font-size:13px; }
 </style>
 </head>
@@ -125,12 +127,17 @@ module.exports = NodeHelper.create({
       ? '<button class="wide" onclick="cmd(\\''+s.identifier+'\\',\\''+(s.cyclePaused?"resume":"pause")+'\\')">' +
         (s.cyclePaused ? "▶ Resume auto-cycle" : "⏸ Pause auto-cycle") + '</button>'
       : "";
+    var test =
+      '<div class="row test">' +
+        '<button onclick="cmd(\\''+s.identifier+'\\',\\'test-motion\\')">Test motion flag</button>' +
+        '<button onclick="cmd(\\''+s.identifier+'\\',\\'test-doorbell\\')">Test doorbell flag</button>' +
+      '</div>';
     return '<div class="inst">' +
       '<div class="row">' +
         '<button onclick="cmd(\\''+s.identifier+'\\',\\'prev\\')">◀ Prev</button>' +
         '<button onclick="cmd(\\''+s.identifier+'\\',\\'next\\')">Next ▶</button>' +
       '</div>' +
-      '<div class="cams">' + cams + '</div>' + cycle +
+      '<div class="cams">' + cams + '</div>' + cycle + test +
     '</div>';
   }
   function refresh() {
@@ -402,11 +409,13 @@ module.exports = NodeHelper.create({
 		const deviceId = ru.name.split("/devices/")[1];
 		if (!deviceId) return null;
 		const types = Object.keys(ru.events);
-		let kind = null;
-		if (types.some((t) => t.includes("DoorbellChime"))) kind = "doorbell";
-		else if (types.some((t) => t.includes("CameraMotion") || t.includes("CameraPerson"))) kind = "motion";
+		// kind drives behavior (doorbell=red, motion=amber); label is the human tag shown on the tile.
+		let kind = null, label = null;
+		if (types.some((t) => t.includes("DoorbellChime"))) { kind = "doorbell"; label = "DOORBELL"; }
+		else if (types.some((t) => t.includes("CameraPerson"))) { kind = "motion"; label = "PERSON"; }
+		else if (types.some((t) => t.includes("CameraMotion"))) { kind = "motion"; label = "MOTION"; }
 		if (!kind) return null;   // ignore Sound / ClipPreview-only updates
-		return { deviceId, kind };
+		return { deviceId, kind, label };
 	},
 
 	handleEventMessage(message) {
@@ -415,6 +424,14 @@ module.exports = NodeHelper.create({
 			body = JSON.parse(message.data.toString());
 		} catch (e) {
 			return;
+		}
+		// Log every received event (type + device) so the true cadence is observable
+		// in magicmirror.log — Nest throttles camera events, so this helps distinguish
+		// "no event arrived" from "event arrived but ignored/unmatched".
+		const ru = body && body.resourceUpdate;
+		if (ru && ru.events) {
+			const dev = ru.name ? ru.name.split("/devices/").pop() : "?";
+			Log.info(`[${this.name}] Pub/Sub event ${dev.slice(0, 12)}… types=[${Object.keys(ru.events).join(", ")}]`);
 		}
 		const evt = this.classifyEvent(body);
 		if (evt) {

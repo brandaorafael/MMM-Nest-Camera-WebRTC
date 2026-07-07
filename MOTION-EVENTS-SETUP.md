@@ -145,7 +145,8 @@ The Pi needs credentials to pull from the subscription.
 | *"The PubSub topic is not found"* when registering in Device Access Console | Topic doesn't exist yet, or Nest can't publish to it. Do Steps 1–2 first. |
 | *"Email addresses and domains must be associated with an active Google … account"* when adding the publisher | Console picker rejects the Google Group. Grant it via **Cloud Shell** (Step 2), not the UI. |
 | *"Service account sdm-publisher@… does not exist"* / *"… @system.gserviceaccount.com does not exist"* | Wrong member type/address. It's `group:sdm-publisher@googlegroups.com`, not a service account. |
-| Setup all green but **no events arrive** | (a) Publisher grant used a wrong address — recheck Step 2 against the docs; (b) events not enabled for the device in Google Home; (c) key's service account lacks `Pub/Sub Subscriber` on the subscription. |
+| Setup all green but **no events arrive** | (a) Publisher grant used a wrong address — recheck Step 2 against the docs; (b) events not enabled for the device in Google Home; (c) key's service account lacks `Pub/Sub Subscriber` on the subscription. Use the **Test motion/doorbell flag** buttons on `/nest-cam` to confirm the *rendering* works independently of Nest. |
+| Focus works but only **occasionally** | Expected — Nest throttles camera events; motion/person events arrive sparsely (often minutes apart). The doorbell chime is the most reliable trigger. This is a Nest-side limit, not a module bug. `node_helper` logs every received event (`Pub/Sub event …`) so you can see the real cadence in `magicmirror.log`. |
 
 ## Cost
 

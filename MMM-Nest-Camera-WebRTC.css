@@ -89,39 +89,62 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Motion / doorbell event flag: pulsing ring + corner icon on the tile.
+   Motion / doorbell event flag: bold pulsing ring + text badge on the tile.
    Amber for motion/person, red for a doorbell chime. Applied to .rtw-wrapper.
+   The ring is a thick solid border that pulses, sized to stand out against the
+   semi-transparent mirror overlay. Events are rare (Nest throttles them), so
+   each one is meant to be unmistakable.
    --------------------------------------------------------------------------- */
 .rtw-event-motion .rtw-video {
-  animation: rtw-pulse-motion 1.2s ease-in-out infinite;
-  border-radius: 3px;
+  animation: rtw-pulse-motion 1s ease-in-out infinite;
+  border-radius: 4px;
 }
 
 .rtw-event-doorbell .rtw-video {
-  animation: rtw-pulse-doorbell 0.9s ease-in-out infinite;
-  border-radius: 3px;
+  animation: rtw-pulse-doorbell 0.7s ease-in-out infinite;
+  border-radius: 4px;
 }
 
 @keyframes rtw-pulse-motion {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 179, 0, 0.9), 0 0 6px 2px rgba(255, 179, 0, 0.4); }
-  50%      { box-shadow: 0 0 0 3px rgba(255, 179, 0, 1), 0 0 16px 5px rgba(255, 179, 0, 0.7); }
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 176, 0, 0.95), 0 0 14px 4px rgba(255, 176, 0, 0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 200, 40, 1), 0 0 34px 12px rgba(255, 176, 0, 0.85); }
 }
 
 @keyframes rtw-pulse-doorbell {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 45, 45, 0.9), 0 0 6px 2px rgba(255, 45, 45, 0.4); }
-  50%      { box-shadow: 0 0 0 3px rgba(255, 45, 45, 1), 0 0 18px 6px rgba(255, 45, 45, 0.8); }
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 45, 45, 0.95), 0 0 14px 4px rgba(255, 45, 45, 0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 80, 80, 1), 0 0 38px 14px rgba(255, 45, 45, 0.9); }
 }
 
-.rtw-event-icon {
+/* Text badge (no emoji — Electron on the Pi lacks a colour-emoji font) */
+.rtw-event-badge {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 0.85em;
+  top: 6px;
+  right: 6px;
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   line-height: 1;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: #1a1206;
   pointer-events: none;
+  animation: rtw-badge-blink 1s ease-in-out infinite;
+}
+
+.rtw-event-motion .rtw-event-badge {
+  background: rgba(255, 190, 30, 0.95);
+  box-shadow: 0 0 10px 2px rgba(255, 176, 0, 0.7);
+}
+
+.rtw-event-doorbell .rtw-event-badge {
+  background: rgba(255, 70, 70, 0.95);
+  color: #fff;
+  box-shadow: 0 0 10px 2px rgba(255, 45, 45, 0.8);
+}
+
+@keyframes rtw-badge-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 
 .rtw-error {}
