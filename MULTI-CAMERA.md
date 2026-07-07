@@ -129,11 +129,13 @@ and stay in sync. After each action the frontend pushes a `CONTROL_STATE` snapsh
   `applyControl`. (MMM-Remote-Control still works too, via the notification API.)
 - **Phase 3:** implement the `grid` / `carousel` / `focus` layout render branches
   (CSS scaffolding already exists).
-- **Phase 4:** **motion-driven focus** — subscribe to SDM camera events
+- **Phase 4 (in progress):** **motion-driven focus** — subscribe to SDM camera events
   (`CameraMotion.Motion`, `DoorbellChime.Chime`) via Google Cloud Pub/Sub
   (`@google-cloud/pubsub` + a service-account key + Device Access Console setup),
   map the event's device id → `cameraId`, emit `MOTION_<cameraId>`, and auto-promote
-  that camera as hero with a hold timer that suppresses auto-cycle.
+  that camera as hero (a `motion` action through `applyControl`) with a hold timer that
+  suppresses auto-cycle. **Google-side Pub/Sub setup is documented in
+  [`MOTION-EVENTS-SETUP.md`](MOTION-EVENTS-SETUP.md).**
 
 ## Known constraint: Raspberry Pi decode load
 
