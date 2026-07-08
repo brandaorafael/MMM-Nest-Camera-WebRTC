@@ -21,6 +21,13 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		pubsubKeyFile: "",       // service-account JSON, relative to the module folder
 		motionHoldMs: 20000,     // keep the triggered camera as hero / flag its thumbnail this long
 
+		// Event history panel (chronological log of motion/doorbell events)
+		showEventHistory: false,
+		historyPosition: "top_left",   // any MagicMirror region: top_left, top_right, top_center, …
+		historyMaxEntries: 20,         // max rows shown
+		historyMaxAgeMs: 86400000,     // drop entries older than this (24h); 0 = no age limit
+		historyTitle: "Event History",
+
 		reconnectDelay: 3000,
 		extendInterval: 240000  // must be < 300000 (Nest sessions expire at 5 min)
 	},
@@ -46,10 +53,12 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		// true, motion events flag thumbnails but never steal the hero. Reset on resume.
 		this.manualPinned = false;
 		this.motionResumeTimer = null;
+		this.eventHistory = [];    // [{name, kind, label, at}] newest last; seeded from node_helper
 
 		this.normalizeCameras();
 		this.startInputControl();   // keyboard / wireless-remote control (always listening)
 		this.startEventStream();    // motion/doorbell auto-focus (if enabled + configured)
+		this.startEventHistory();   // load persisted event history (if enabled)
 
 		if (this.data.hiddenOnStartup) {
 			// Don't connect if module is going to be hidden
@@ -261,6 +270,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		for (const id of this.cameraOrder) {
 			const cam = this.cameras[id];
 			if (cam.eventFlagTimer) { clearTimeout(cam.eventFlagTimer); cam.eventFlagTimer = null; }
+		}
+		if (this._historyEl && this._historyEl.parentNode) {
+			this._historyEl.parentNode.removeChild(this._historyEl);
+			this._historyEl = null;
 		}
 		this.cleanupAllCameras();
 	},
@@ -647,14 +660,22 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		});
 	},
 
-	handleMotionEvent(cameraId, kind, label) {
+	handleMotionEvent(cameraId, kind, label, opts) {
 		const cam = this.cameras[cameraId];
 		if (!cam) return;
 		const hold = this.config.motionHoldMs || 20000;
+		const record = !opts || opts.record !== false;   // synthetic test events pass record:false
 
 		// 1. Flag the thumbnail (always — even under manual control, so you notice).
 		cam.eventFlag = (kind === "doorbell") ? "doorbell" : "motion";
 		cam.eventLabel = label || (kind === "doorbell" ? "DOORBELL" : "MOTION");
+
+		// Record it in the event history (persistence is handled by node_helper).
+		if (record) {
+			this.eventHistory.push({ name: cam.name, kind, label: cam.eventLabel, at: (opts && opts.at) || Date.now() });
+			if (this.eventHistory.length > 500) this.eventHistory = this.eventHistory.slice(-500);
+			this.renderEventHistory();
+		}
 		if (cam.eventFlagTimer) clearTimeout(cam.eventFlagTimer);
 		cam.eventFlagTimer = setTimeout(() => {
 			cam.eventFlag = null;
@@ -702,6 +723,105 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			badge.textContent = `● ${cam.eventLabel || (cam.eventFlag === "doorbell" ? "DOORBELL" : "MOTION")}`;
 			w.appendChild(badge);
 			cam.eventIconEl = badge;
+		}
+	},
+
+	// ---------------------------------------------------------------------------
+	// Event history panel (rendered into a configurable MagicMirror region)
+	//
+	// node_helper is the source of truth: it persists every event to disk and
+	// replies to GET_HISTORY. The frontend seeds from that on start, appends new
+	// events live, and renders a chronological panel into config.historyPosition.
+	// ---------------------------------------------------------------------------
+
+	startEventHistory() {
+		if (!this.config.showEventHistory) return;
+		// Ask node_helper for the persisted history; it replies HISTORY_<identifier>.
+		this.sendSocketNotification("GET_HISTORY", { identifier: this.identifier });
+		// Render an (empty) panel immediately so the region isn't blank while we wait.
+		this.renderEventHistory();
+	},
+
+	seedHistory(stored) {
+		this.eventHistory = (Array.isArray(stored) ? stored : []).map((e) => ({
+			name: this._nameForDevice(e.deviceId) || (e.deviceId ? e.deviceId.slice(0, 10) + "…" : "Camera"),
+			kind: e.kind,
+			label: e.label,
+			at: e.at
+		}));
+		this.renderEventHistory();
+	},
+
+	_nameForDevice(deviceId) {
+		const id = this.cameraOrder.find((i) => this.cameras[i].config.nestDeviceId === deviceId);
+		return id ? this.cameras[id].name : null;
+	},
+
+	// Pure: the entries to display (age-filtered, newest first, capped). No DOM.
+	_visibleHistory(now) {
+		const maxAge = this.config.historyMaxAgeMs || 0;
+		const maxN = this.config.historyMaxEntries || 20;
+		let items = this.eventHistory.slice();
+		if (maxAge > 0) items = items.filter((e) => now - e.at <= maxAge);
+		items.sort((a, b) => b.at - a.at);
+		return items.slice(0, maxN);
+	},
+
+	_historyContainer() {
+		const pos = (this.config.historyPosition || "top_left").replace(/_/g, " ");
+		const region = document.getElementsByClassName(`region ${pos}`)[0];
+		if (!region) return null;
+		return region.getElementsByClassName("container")[0] || null;
+	},
+
+	_fmtHistTime(ms) {
+		const d = new Date(ms);
+		const p = (n) => String(n).padStart(2, "0");
+		return `${p(d.getHours())}:${p(d.getMinutes())}`;
+	},
+
+	renderEventHistory() {
+		if (!this.config.showEventHistory) return;
+		const container = this._historyContainer();
+		if (!container) return;
+
+		let el = this._historyEl;
+		if (!el || !el.isConnected) {
+			el = document.createElement("div");
+			el.id = `${this.identifier}-history`;
+			el.className = "rtw-history";
+			this._historyEl = el;
+		}
+		if (el.parentNode !== container) container.appendChild(el);
+
+		el.innerHTML = "";
+		const title = document.createElement("div");
+		title.className = "rtw-history-title";
+		title.textContent = this.config.historyTitle || "Event History";
+		el.appendChild(title);
+
+		const items = this._visibleHistory(Date.now());
+		if (!items.length) {
+			const empty = document.createElement("div");
+			empty.className = "rtw-history-empty";
+			empty.textContent = "No events yet";
+			el.appendChild(empty);
+			return;
+		}
+		for (const e of items) {
+			const row = document.createElement("div");
+			row.className = `rtw-history-row rtw-h-${e.kind === "doorbell" ? "doorbell" : "motion"}`;
+			const t = document.createElement("span");
+			t.className = "rtw-h-time";
+			t.textContent = this._fmtHistTime(e.at);
+			const c = document.createElement("span");
+			c.className = "rtw-h-cam";
+			c.textContent = e.name;
+			const k = document.createElement("span");
+			k.className = "rtw-h-type";
+			k.textContent = e.label || (e.kind === "doorbell" ? "DOORBELL" : "MOTION");
+			row.append(t, c, k);
+			el.appendChild(row);
 		}
 	},
 
@@ -944,7 +1064,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 					const cid = this.resolveCameraId(target != null ? target : this.heroId);
 					if (cid) {
 						const doorbell = payload.action === "test-doorbell";
-						this.handleMotionEvent(cid, doorbell ? "doorbell" : "motion", doorbell ? "DOORBELL" : "TEST");
+						this.handleMotionEvent(cid, doorbell ? "doorbell" : "motion", doorbell ? "DOORBELL" : "TEST", { record: false });
 					}
 				} else {
 					this.applyControl(payload.action, target);
@@ -960,7 +1080,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				const cameraId = this.cameraOrder.find(
 					(id) => this.cameras[id].config.nestDeviceId === payload.deviceId
 				);
-				if (cameraId) this.handleMotionEvent(cameraId, payload.kind, payload.label);
+				if (cameraId) this.handleMotionEvent(cameraId, payload.kind, payload.label, { at: payload.at });
 			}
 			return;
 		}
@@ -997,6 +1117,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.needsAuth = true;
 				this.authUrl = payload.authUrl;
 				this.updateDom();
+				break;
+			case "HISTORY":
+				// Persisted event history from node_helper (array of {deviceId, kind, label, at}).
+				this.seedHistory(payload);
 				break;
 		}
 	},

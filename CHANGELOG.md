@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.3.0] – 2026-07-08
+
+### Added
+- **Event history panel.** A chronological log of motion/person/doorbell events (newest first, `time · camera · type`), rendered into a configurable MagicMirror region.
+  - `showEventHistory` enables it; `historyPosition` picks the region (any MM position, e.g. `top_left`, default); `historyMaxEntries` and `historyMaxAgeMs` bound what's shown.
+  - **Persisted to disk** by `node_helper` (`event-history.json`, git-ignored) so the log survives restarts/reboots; the frontend seeds from it on startup (`GET_HISTORY`) and appends live events.
+  - Type colour-coded (amber for motion/person, red for doorbell); rows resolve device IDs back to camera names.
+- The panel is injected into the chosen region's container, so it can live in a different corner than the camera module itself.
+
+### Notes
+- Synthetic `Test motion/doorbell flag` events are not recorded in history (they don't reach `node_helper`).
+- Persisted store is hard-capped at 500 entries; display limits (`historyMaxEntries` / `historyMaxAgeMs`) are applied client-side.
+
 ## [2.2.1] – 2026-07-07
 
 ### Fixed

@@ -3,3 +3,4 @@ node_modules
 tokens.json
 pubsub-key.json
 *.serviceaccount.json
+event-history.json

@@ -147,6 +147,57 @@
   50%      { opacity: 0.55; }
 }
 
+/* ---------------------------------------------------------------------------
+   Event history panel — injected into config.historyPosition (a MM region).
+   Compact chronological log: time · camera · type, newest first.
+   --------------------------------------------------------------------------- */
+.rtw-history {
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: #ddd;
+  max-width: 340px;
+}
+
+.rtw-history-title {
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 4px;
+}
+
+.rtw-history-empty {
+  opacity: 0.4;
+}
+
+.rtw-history-row {
+  display: grid;
+  grid-template-columns: 3.2em 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.rtw-h-time {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.rtw-h-cam {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rtw-h-type {
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rtw-history-row.rtw-h-motion .rtw-h-type { color: #ffbe1e; }
+.rtw-history-row.rtw-h-doorbell .rtw-h-type { color: #ff5a5a; }
+
 .rtw-error {}
 
 .rtw-dark-screen {

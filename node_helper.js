@@ -13,6 +13,8 @@ const Log = require("logger");
 const mediaSessionIds = {};
 
 const getTokensPath = () => path.join(__dirname, "tokens.json");
+const getHistoryPath = () => path.join(__dirname, "event-history.json");
+const HISTORY_STORE_CAP = 500;   // hard cap on persisted entries (display caps applied in the frontend)
 
 function loadTokens() {
 	try {
@@ -33,7 +35,27 @@ module.exports = NodeHelper.create({
 		// Latest control state per module instance (pushed by the frontend), so the
 		// self-hosted web control page can render live camera buttons.
 		this.controlStates = {};
+		// Persisted event history (array of {deviceId, kind, label, at}), loaded from disk.
+		this.eventHistory = this.loadHistory();
 		this.setupControlServer();
+	},
+
+	loadHistory() {
+		try {
+			const data = fs.readFileSync(getHistoryPath(), "utf8");
+			const parsed = JSON.parse(data);
+			return Array.isArray(parsed) ? parsed : [];
+		} catch {
+			return [];
+		}
+	},
+
+	saveHistory() {
+		try {
+			fs.writeFileSync(getHistoryPath(), JSON.stringify(this.eventHistory), "utf8");
+		} catch (e) {
+			Log.error(`[${this.name}] Failed to persist event history: ${e.message}`);
+		}
 	},
 
 	// Register the web control page + command endpoints on MagicMirror's own
@@ -435,6 +457,14 @@ module.exports = NodeHelper.create({
 		}
 		const evt = this.classifyEvent(body);
 		if (evt) {
+			// Timestamp from the event body when present, else receipt time.
+			evt.at = Date.parse(body.timestamp) || Date.now();
+			// Persist to the history store (hard-capped; frontend applies display caps).
+			this.eventHistory.push(evt);
+			if (this.eventHistory.length > HISTORY_STORE_CAP) {
+				this.eventHistory = this.eventHistory.slice(-HISTORY_STORE_CAP);
+			}
+			this.saveHistory();
 			// Broadcast to all module instances; each frontend keeps only events for
 			// a device it owns.
 			this.sendSocketNotification("NEST_EVENT", evt);
@@ -495,6 +525,10 @@ module.exports = NodeHelper.create({
 				break;
 			case "INIT_EVENTS":
 				await this.initEvents(payload);
+				break;
+			case "GET_HISTORY":
+				// Frontend requests the persisted event history on startup.
+				this.sendSocketNotification(`HISTORY_${payload.identifier}`, this.eventHistory);
 				break;
 			case "EXTEND_STREAM":
 				await this.extendStream(payload);
