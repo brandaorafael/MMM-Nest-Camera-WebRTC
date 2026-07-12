@@ -801,7 +801,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			// The "module" class matters: MagicMirror's updateWrapperStates() hides any
 			// region container that holds no .module element, so without it an injected
 			// panel in an otherwise-empty region (e.g. middle_center) gets display:none.
-			el.className = "module rtw-history";
+			// For a vertically-centred region, lift the card so it clears whatever sits
+			// in the lower third (e.g. the compliments module).
+			const mid = /middle|center/.test(this.config.historyPosition || "");
+			el.className = "module rtw-history" + (mid ? " rtw-history-mid" : "");
 			this._historyEl = el;
 		}
 		if (el.parentNode !== container) container.appendChild(el);

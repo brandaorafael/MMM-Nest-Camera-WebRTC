@@ -170,6 +170,12 @@
   max-width: 92vw;
 }
 
+/* In a vertically-centred region, sit in the upper-centre so the card clears
+   whatever lives in the lower third (e.g. the rotating compliments). */
+.rtw-history-mid {
+  transform: translateY(-8vh);
+}
+
 .rtw-history-title {
   font-size: 0.42em;
   font-weight: 600;
