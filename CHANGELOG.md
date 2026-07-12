@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.3.3] – 2026-07-12
+
+### Changed
+- **Redesigned the event history panel** as a proper activity feed: a frosted translucent card (blur + soft border) instead of a black box, a glowing status dot per row (amber motion/person, red doorbell), light-weight camera names, small colour-coded type tags, and **relative timestamps** (`now` / `10m` / `2h` / `1d`) that refresh once a minute. The most recent entry (<90s) pulses.
+
 ## [2.3.2] – 2026-07-12
 
 ### Fixed

@@ -151,59 +151,92 @@
    Event history panel — injected into config.historyPosition (a MM region).
    Compact chronological log: time · camera · type, newest first.
    --------------------------------------------------------------------------- */
-/* The region container is a stretch flex column, which would force the panel to
-   full width. align-self:center shrinks it to its content and centres it inside
-   a centered region (middle_center / *_third); in a corner it hugs that corner. */
+/* Activity-feed card. align-self:center stops the region's stretch-flex from
+   forcing it full-width; a frosted translucent card keeps it legible over the
+   video without a heavy black box. */
 .rtw-history {
   align-self: center;
   text-align: left;
-  font-size: 1em;              /* overridden by config.historyFontSize (inline) */
-  line-height: 1.4;
-  color: #eee;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 12px 20px;
-  border-radius: 10px;
+  font-weight: 300;
+  line-height: 1.3;
+  color: #fff;
+  padding: 0.7em 1em 0.8em;
+  border-radius: 0.55em;
+  background: linear-gradient(180deg, rgba(20, 22, 28, 0.55), rgba(20, 22, 28, 0.32));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0.4em 1.6em rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   max-width: 92vw;
 }
 
 .rtw-history-title {
-  font-size: 0.7em;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: 0.42em;
+  font-weight: 600;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
-  opacity: 0.55;
-  margin-bottom: 8px;
-  text-align: center;
+  opacity: 0.4;
+  margin: 0 0.2em 0.7em;
+  padding-bottom: 0.6em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
 }
 
 .rtw-history-empty {
+  font-size: 0.55em;
   opacity: 0.4;
-  text-align: center;
+  padding: 0.2em;
 }
 
-/* One shared grid → the three columns align across every row */
+/* One shared grid → dot · camera · type · when align across every row */
 .rtw-history-rows {
   display: grid;
-  grid-template-columns: auto auto auto;
-  column-gap: 1.2em;
-  row-gap: 0.3em;
-  align-items: baseline;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  column-gap: 0.7em;
+  row-gap: 0.5em;
   white-space: nowrap;
 }
 
-.rtw-h-time {
-  opacity: 0.7;
-  font-variant-numeric: tabular-nums;
+.rtw-h-dot {
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  justify-self: center;
+}
+
+.rtw-h-dot.rtw-h-motion { background: #ffbe1e; box-shadow: 0 0 0.5em 0.05em rgba(255, 190, 30, 0.75); }
+.rtw-h-dot.rtw-h-doorbell { background: #ff5a5a; box-shadow: 0 0 0.5em 0.05em rgba(255, 90, 90, 0.85); }
+
+.rtw-h-dot.rtw-h-fresh { animation: rtw-h-pulse 1.6s ease-in-out infinite; }
+
+@keyframes rtw-h-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.4); opacity: 0.55; }
+}
+
+.rtw-h-cam {
+  font-weight: 300;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rtw-h-type {
+  font-size: 0.5em;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-align: right;
+  letter-spacing: 0.1em;
+  opacity: 0.9;
 }
 
-.rtw-h-type.rtw-h-motion { color: #ffbe1e; }
-.rtw-h-type.rtw-h-doorbell { color: #ff5a5a; }
+.rtw-h-type.rtw-h-motion { color: #ffcf5a; }
+.rtw-h-type.rtw-h-doorbell { color: #ff7a7a; }
+
+.rtw-h-ago {
+  font-size: 0.58em;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.8em;
+  justify-self: end;
+}
 
 .rtw-error {}
 

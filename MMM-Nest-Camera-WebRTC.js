@@ -272,6 +272,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			const cam = this.cameras[id];
 			if (cam.eventFlagTimer) { clearTimeout(cam.eventFlagTimer); cam.eventFlagTimer = null; }
 		}
+		if (this._historyRefreshTimer) {
+			clearInterval(this._historyRefreshTimer);
+			this._historyRefreshTimer = null;
+		}
 		if (this._historyEl && this._historyEl.parentNode) {
 			this._historyEl.parentNode.removeChild(this._historyEl);
 			this._historyEl = null;
@@ -741,6 +745,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		this.sendSocketNotification("GET_HISTORY", { identifier: this.identifier });
 		// Render an (empty) panel immediately so the region isn't blank while we wait.
 		this.renderEventHistory();
+		// Re-render every minute so the relative "2m/1h" times stay fresh and aged-out
+		// entries drop off on their own.
+		if (this._historyRefreshTimer) clearInterval(this._historyRefreshTimer);
+		this._historyRefreshTimer = setInterval(() => this.renderEventHistory(), 60000);
 	},
 
 	seedHistory(stored) {
@@ -815,23 +823,38 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			el.appendChild(empty);
 			return;
 		}
-		// One shared grid so the three columns line up across every row.
+		// One shared grid so every row's columns line up: dot · camera · type · when.
+		const now = Date.now();
 		const rows = document.createElement("div");
 		rows.className = "rtw-history-rows";
 		for (const e of items) {
 			const kindClass = e.kind === "doorbell" ? "rtw-h-doorbell" : "rtw-h-motion";
-			const t = document.createElement("span");
-			t.className = "rtw-h-time";
-			t.textContent = this._fmtHistTime(e.at);
+			const fresh = now - e.at < 90000 ? " rtw-h-fresh" : "";
+			const dot = document.createElement("span");
+			dot.className = `rtw-h-dot ${kindClass}${fresh}`;
 			const c = document.createElement("span");
 			c.className = "rtw-h-cam";
 			c.textContent = e.name;
 			const k = document.createElement("span");
 			k.className = `rtw-h-type ${kindClass}`;
 			k.textContent = e.label || (e.kind === "doorbell" ? "DOORBELL" : "MOTION");
-			rows.append(t, c, k);
+			const ago = document.createElement("span");
+			ago.className = "rtw-h-ago";
+			ago.textContent = this._agoText(e.at, now);
+			rows.append(dot, c, k, ago);
 		}
 		el.appendChild(rows);
+	},
+
+	// Compact relative time for the feed: "now", "3m", "2h", "1d".
+	_agoText(ms, now) {
+		const s = Math.max(0, Math.floor((now - ms) / 1000));
+		if (s < 45) return "now";
+		const m = Math.floor(s / 60);
+		if (m < 60) return `${m}m`;
+		const h = Math.floor(m / 60);
+		if (h < 24) return `${h}h`;
+		return `${Math.floor(h / 24)}d`;
 	},
 
 	// ---------------------------------------------------------------------------
