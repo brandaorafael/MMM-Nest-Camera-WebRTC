@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.3.2] – 2026-07-12
+
+### Fixed
+- **Duplicate history entries.** Nest publishes several Pub/Sub messages for a single detection (a Motion message, a Person message, redeliveries…), all sharing one `eventSessionId` — each was being recorded as its own row (a single detection produced 3–4 identical-timestamp entries). Now deduped on `eventSessionId`, so **one detection = one entry** (and one focus/flag trigger). The genuine per-camera cooldown is large (events are typically many minutes apart); the duplicates were masking that.
+
 ## [2.3.1] – 2026-07-12
 
 ### Added

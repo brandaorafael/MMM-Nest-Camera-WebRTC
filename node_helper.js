@@ -437,7 +437,13 @@ module.exports = NodeHelper.create({
 		else if (types.some((t) => t.includes("CameraPerson"))) { kind = "motion"; label = "PERSON"; }
 		else if (types.some((t) => t.includes("CameraMotion"))) { kind = "motion"; label = "MOTION"; }
 		if (!kind) return null;   // ignore Sound / ClipPreview-only updates
-		return { deviceId, kind, label };
+		// eventSessionId groups every message Nest sends for ONE detection (Motion,
+		// Person, ClipPreview, redeliveries…). We dedupe on it so one detection = one entry.
+		let sessionId = null;
+		for (const t of types) {
+			if (ru.events[t] && ru.events[t].eventSessionId) { sessionId = ru.events[t].eventSessionId; break; }
+		}
+		return { deviceId, kind, label, sessionId };
 	},
 
 	handleEventMessage(message) {
@@ -457,8 +463,21 @@ module.exports = NodeHelper.create({
 		}
 		const evt = this.classifyEvent(body);
 		if (evt) {
+			// Dedupe: Nest sends several messages per detection (same eventSessionId).
+			// Skip any we've already handled so one detection makes exactly one entry.
+			if (evt.sessionId) {
+				this._recentSessions = this._recentSessions || new Set();
+				const key = `${evt.deviceId}|${evt.sessionId}`;
+				if (this._recentSessions.has(key)) return;
+				this._recentSessions.add(key);
+				if (this._recentSessions.size > 300) {
+					// bound the set: drop the oldest ~100 keys
+					for (const k of [...this._recentSessions].slice(0, 100)) this._recentSessions.delete(k);
+				}
+			}
 			// Timestamp from the event body when present, else receipt time.
 			evt.at = Date.parse(body.timestamp) || Date.now();
+			delete evt.sessionId;   // not needed in the stored/relayed payload
 			// Persist to the history store (hard-capped; frontend applies display caps).
 			this.eventHistory.push(evt);
 			if (this.eventHistory.length > HISTORY_STORE_CAP) {
