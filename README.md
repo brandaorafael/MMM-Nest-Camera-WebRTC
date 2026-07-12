@@ -201,13 +201,14 @@ Set `showEventHistory: true` to render a chronological log of motion/person/door
 
 ```js
 showEventHistory: true,
-historyPosition: "top_left",   // any MagicMirror region: top_left, top_right, top_center, bottom_right, …
-historyMaxEntries: 20,         // max rows shown
-historyMaxAgeMs: 86400000,     // hide entries older than this (24h); 0 = no age limit
-historyTitle: "Event History"  // panel heading
+historyPosition: "middle_center", // any MagicMirror region: top_left, middle_center, lower_third, bottom_right, …
+historyMaxEntries: 8,             // max rows shown
+historyMaxAgeMs: 86400000,        // hide entries older than this (24h); 0 = no age limit
+historyTitle: "Event History",    // panel heading
+historyFontSize: "1.6em"          // panel text size (blank = default); larger for a centre placement
 ```
 
-The history is **persisted to disk** (`event-history.json`, git-ignored) by the node helper, so it survives restarts, and is seeded back into the panel on startup. It can sit in a different corner than the camera tiles. Requires motion events to be configured (see above).
+The history is **persisted to disk** (`event-history.json`, git-ignored) by the node helper, so it survives restarts, and is seeded back into the panel on startup. It can sit in **any region** — a compact corner (`top_left`) or a large centered overlay (`middle_center`) — independent of where the camera tiles are. Requires motion events to be configured (see above).
 
 > **Performance note (Raspberry Pi):** every configured camera streams live simultaneously, and each is a hardware H.264 decode. A Pi can comfortably handle 2 streams; 3–4 concurrent 1080p streams may exceed the GPU's simultaneous-decode budget and cause stutter or dropped frames. Test on your hardware and, if needed, reduce the number of cameras or lower stream resolution. Motion-driven focus and keeping only the hero live are planned to ease this (see `MULTI-CAMERA.md`).
 

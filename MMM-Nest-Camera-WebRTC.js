@@ -27,6 +27,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		historyMaxEntries: 20,         // max rows shown
 		historyMaxAgeMs: 86400000,     // drop entries older than this (24h); 0 = no age limit
 		historyTitle: "Event History",
+		historyFontSize: "",           // CSS size (e.g. "1.5em", "22px"); blank = stylesheet default
 
 		reconnectDelay: 3000,
 		extendInterval: 240000  // must be < 300000 (Nest sessions expire at 5 min)
@@ -789,10 +790,16 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		if (!el || !el.isConnected) {
 			el = document.createElement("div");
 			el.id = `${this.identifier}-history`;
-			el.className = "rtw-history";
+			// The "module" class matters: MagicMirror's updateWrapperStates() hides any
+			// region container that holds no .module element, so without it an injected
+			// panel in an otherwise-empty region (e.g. middle_center) gets display:none.
+			el.className = "module rtw-history";
 			this._historyEl = el;
 		}
 		if (el.parentNode !== container) container.appendChild(el);
+		// Font size is config-driven so the panel can be compact in a corner or
+		// large in the centre.
+		el.style.fontSize = this.config.historyFontSize || "";
 
 		el.innerHTML = "";
 		const title = document.createElement("div");
@@ -808,9 +815,11 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			el.appendChild(empty);
 			return;
 		}
+		// One shared grid so the three columns line up across every row.
+		const rows = document.createElement("div");
+		rows.className = "rtw-history-rows";
 		for (const e of items) {
-			const row = document.createElement("div");
-			row.className = `rtw-history-row rtw-h-${e.kind === "doorbell" ? "doorbell" : "motion"}`;
+			const kindClass = e.kind === "doorbell" ? "rtw-h-doorbell" : "rtw-h-motion";
 			const t = document.createElement("span");
 			t.className = "rtw-h-time";
 			t.textContent = this._fmtHistTime(e.at);
@@ -818,11 +827,11 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			c.className = "rtw-h-cam";
 			c.textContent = e.name;
 			const k = document.createElement("span");
-			k.className = "rtw-h-type";
+			k.className = `rtw-h-type ${kindClass}`;
 			k.textContent = e.label || (e.kind === "doorbell" ? "DOORBELL" : "MOTION");
-			row.append(t, c, k);
-			el.appendChild(row);
+			rows.append(t, c, k);
 		}
+		el.appendChild(rows);
 	},
 
 	// ---------------------------------------------------------------------------

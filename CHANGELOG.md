@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.3.1] – 2026-07-12
+
+### Added
+- `historyFontSize` config — set the history panel's text size (e.g. `"1.6em"`), so it can be compact in a corner or large in the centre.
+
+### Fixed
+- **History panel now works in an otherwise-empty region** (e.g. `middle_center`). MagicMirror's `updateWrapperStates()` hides any region container with no `.module` element, so the injected panel is now tagged `module` to keep the region visible.
+- **Panel no longer stretches full-width.** The region's flex container was stretching it edge-to-edge; it now uses `align-self: center` to shrink to its content and centre. Rows use one shared grid so the three columns line up, with a subtle backdrop for legibility over busy content.
+
 ## [2.3.0] – 2026-07-08
 
 ### Added
