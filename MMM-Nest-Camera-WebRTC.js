@@ -833,6 +833,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		for (const e of items) {
 			const kindClass = e.kind === "doorbell" ? "rtw-h-doorbell" : "rtw-h-motion";
 			const fresh = now - e.at < 90000 ? " rtw-h-fresh" : "";
+			// Each event is its own row wrapper so it can carry a divider and a
+			// fresh-event highlight while the cells stay column-aligned.
+			const row = document.createElement("div");
+			row.className = `rtw-h-row ${kindClass}${fresh}`;
 			const dot = document.createElement("span");
 			dot.className = `rtw-h-dot ${kindClass}${fresh}`;
 			const c = document.createElement("span");
@@ -844,7 +848,8 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			const ago = document.createElement("span");
 			ago.className = "rtw-h-ago";
 			ago.textContent = this._agoText(e.at, now);
-			rows.append(dot, c, k, ago);
+			row.append(dot, c, k, ago);
+			rows.appendChild(row);
 		}
 		el.appendChild(rows);
 	},

@@ -158,16 +158,17 @@
   align-self: center;
   text-align: left;
   font-weight: 300;
-  line-height: 1.3;
+  line-height: 1.25;
   color: #fff;
-  padding: 0.7em 1em 0.8em;
-  border-radius: 0.55em;
-  background: linear-gradient(180deg, rgba(20, 22, 28, 0.55), rgba(20, 22, 28, 0.32));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 0.4em 1.6em rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  padding: 0.85em 1.15em 0.65em;
+  border-radius: 0.7em;
+  background: linear-gradient(180deg, rgba(24, 26, 33, 0.62), rgba(15, 17, 23, 0.40));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0.5em 2em rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
   max-width: 92vw;
+  min-width: 13em;
 }
 
 /* In a vertically-centred region, sit in the upper-centre so the card clears
@@ -176,36 +177,73 @@
   transform: translateY(-8vh);
 }
 
+/* Header: tracked label on the left, a soft "live" pulse dot pinned right. */
 .rtw-history-title {
-  font-size: 0.42em;
+  display: flex;
+  align-items: center;
+  font-size: 0.4em;
   font-weight: 600;
-  letter-spacing: 0.26em;
+  letter-spacing: 0.3em;
   text-transform: uppercase;
-  opacity: 0.4;
-  margin: 0 0.2em 0.7em;
-  padding-bottom: 0.6em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0 0.1em 0.55em;
+  padding-bottom: 0.7em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rtw-history-title::after {
+  content: "";
+  margin-left: auto;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 0.5em 0.06em rgba(74, 222, 128, 0.7);
+  animation: rtw-h-pulse 2.4s ease-in-out infinite;
 }
 
 .rtw-history-empty {
-  font-size: 0.55em;
+  font-size: 0.5em;
+  letter-spacing: 0.05em;
   opacity: 0.4;
-  padding: 0.2em;
+  padding: 0.3em 0.2em 0.6em;
 }
 
-/* One shared grid → dot · camera · type · when align across every row */
+/* Flex column of per-event rows so each can carry its own divider / highlight. */
 .rtw-history-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Per-row grid: dot · camera(1fr) · badge · time — columns line up across rows
+   because the badge text ("PERSON") and card width are constant. */
+.rtw-h-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 0.7em;
-  row-gap: 0.5em;
+  padding: 0.34em 0.2em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 0.35em;
   white-space: nowrap;
 }
 
+.rtw-h-row:last-child { border-bottom: 0; }
+
+/* Freshest events (< 90s) get a faint tinted wash + a left accent edge. */
+.rtw-h-row.rtw-h-fresh {
+  background: rgba(255, 190, 30, 0.08);
+  box-shadow: inset 0.18em 0 0 rgba(255, 190, 30, 0.8);
+}
+
+.rtw-h-row.rtw-h-doorbell.rtw-h-fresh {
+  background: rgba(255, 90, 90, 0.09);
+  box-shadow: inset 0.18em 0 0 rgba(255, 90, 90, 0.85);
+}
+
 .rtw-h-dot {
-  width: 0.5em;
-  height: 0.5em;
+  width: 0.42em;
+  height: 0.42em;
   border-radius: 50%;
   justify-self: center;
 }
@@ -220,27 +258,43 @@
   50%      { transform: scale(1.4); opacity: 0.55; }
 }
 
+/* Camera name — the bright primary line of each row. */
 .rtw-h-cam {
-  font-weight: 300;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.95);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Event-type badge — a tinted, colour-coded pill. */
 .rtw-h-type {
-  font-size: 0.5em;
+  justify-self: start;
+  font-size: 0.42em;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  opacity: 0.9;
+  letter-spacing: 0.14em;
+  padding: 0.35em 0.75em;
+  border-radius: 999px;
+  border: 1px solid transparent;
 }
 
-.rtw-h-type.rtw-h-motion { color: #ffcf5a; }
-.rtw-h-type.rtw-h-doorbell { color: #ff7a7a; }
+.rtw-h-type.rtw-h-motion {
+  color: #ffd479;
+  background: rgba(255, 190, 30, 0.13);
+  border-color: rgba(255, 190, 30, 0.28);
+}
 
+.rtw-h-type.rtw-h-doorbell {
+  color: #ff9b9b;
+  background: rgba(255, 90, 90, 0.14);
+  border-color: rgba(255, 90, 90, 0.3);
+}
+
+/* Relative time — muted, tabular so the digits don't jitter as they tick. */
 .rtw-h-ago {
-  font-size: 0.58em;
-  opacity: 0.45;
+  font-size: 0.55em;
+  color: rgba(255, 255, 255, 0.42);
   font-variant-numeric: tabular-nums;
-  margin-left: 0.8em;
+  margin-left: 0.7em;
   justify-self: end;
 }
 
