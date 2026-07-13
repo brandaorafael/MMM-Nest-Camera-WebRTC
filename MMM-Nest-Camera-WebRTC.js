@@ -567,6 +567,10 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			default:
 				return;
 		}
+		// Reflect the new hero / pause state on-screen. next/prev/set already
+		// re-render via setHero, but pause/resume/toggle-cycle don't — so the
+		// top-left mode mark would go stale without this.
+		this.updateDom();
 		this.pushControlState();
 	},
 
@@ -729,6 +733,34 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			w.appendChild(badge);
 			cam.eventIconEl = badge;
 		}
+	},
+
+	// Adds/removes the auto-play / paused status mark in the HERO tile's top-left
+	// corner, mirroring this.manualPinned: pinned = "PAUSED", otherwise "AUTO".
+	// Only shown when auto-cycling is actually possible (interval set + >1 camera),
+	// since with a single camera or cycling off there's no mode to convey. Uses a
+	// CSS-drawn icon (not an emoji) — the Pi's Electron has no colour-emoji font.
+	// Called from renderCameraTile (fresh + reuse paths).
+	_syncModeBadge(cameraId, isHero) {
+		const cam = this.cameras[cameraId];
+		if (!cam || !cam.wrapper) return;
+		if (cam.modeEl && cam.modeEl.parentNode) {
+			cam.modeEl.parentNode.removeChild(cam.modeEl);
+		}
+		cam.modeEl = null;
+		const cycleConfigured = (this.config.cycleInterval > 0) && (this.cameraOrder.length > 1);
+		if (!isHero || !cycleConfigured) return;
+		const paused = !!this.manualPinned;
+		const mark = document.createElement("div");
+		mark.className = `rtw-mode ${paused ? "rtw-mode-paused" : "rtw-mode-auto"}`;
+		const icon = document.createElement("span");
+		icon.className = "rtw-mode-icon";
+		const text = document.createElement("span");
+		text.className = "rtw-mode-text";
+		text.textContent = paused ? "PAUSED" : "AUTO";
+		mark.append(icon, text);
+		cam.wrapper.appendChild(mark);
+		cam.modeEl = mark;
 	},
 
 	// ---------------------------------------------------------------------------
@@ -982,6 +1014,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				if (cam.video.paused) cam.video.play().catch(() => {});
 				this._syncEqualizer(cameraId, isHero);
 				this._syncEventFlag(cameraId);
+				this._syncModeBadge(cameraId, isHero);
 				return cam.wrapper;
 			}
 
@@ -1016,6 +1049,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 			this._syncEqualizer(cameraId, isHero);
 			this._syncEventFlag(cameraId);
+			this._syncModeBadge(cameraId, isHero);
 			return cam.wrapper;
 		}
 

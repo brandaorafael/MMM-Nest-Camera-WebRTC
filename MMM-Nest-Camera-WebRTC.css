@@ -89,6 +89,67 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Hero auto-play / paused status mark — top-left of the hero tile, opposite the
+   camera-name label. Green play glyph = auto-cycling; amber pause glyph = pinned
+   on this hero. CSS-drawn icon (no emoji: the Pi's Electron lacks a colour-emoji
+   font). Only the hero tile carries it (see _syncModeBadge).
+   --------------------------------------------------------------------------- */
+.rtw-mode {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  font-size: 0.62em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.rtw-mode-icon {
+  position: relative;
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  flex-shrink: 0;
+}
+
+/* AUTO — green right-pointing play triangle (cycling / live). */
+.rtw-mode-auto { color: #7ef0a6; }
+.rtw-mode-auto .rtw-mode-text { color: #eafff1; }
+.rtw-mode-auto .rtw-mode-icon::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 54%;
+  transform: translate(-50%, -50%);
+  border-style: solid;
+  border-width: 0.4em 0 0.4em 0.62em;
+  border-color: transparent transparent transparent currentColor;
+}
+
+/* PAUSED — amber two-bar pause glyph (held on this hero). */
+.rtw-mode-paused { color: #ffce5a; }
+.rtw-mode-paused .rtw-mode-text { color: #fff3d6; }
+.rtw-mode-paused .rtw-mode-icon::before,
+.rtw-mode-paused .rtw-mode-icon::after {
+  content: "";
+  position: absolute;
+  top: 0.06em;
+  bottom: 0.06em;
+  width: 0.26em;
+  background: currentColor;
+  border-radius: 1px;
+}
+.rtw-mode-paused .rtw-mode-icon::before { left: 0.12em; }
+.rtw-mode-paused .rtw-mode-icon::after { right: 0.12em; }
+
+/* ---------------------------------------------------------------------------
    Motion / doorbell event flag: bold pulsing ring + text badge on the tile.
    Amber for motion/person, red for a doorbell chime. Applied to .rtw-wrapper.
    The ring is a thick solid border that pulses, sized to stand out against the
