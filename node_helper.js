@@ -16,6 +16,20 @@ const getTokensPath = () => path.join(__dirname, "tokens.json");
 const getHistoryPath = () => path.join(__dirname, "event-history.json");
 const HISTORY_STORE_CAP = 500;   // hard cap on persisted entries (display caps applied in the frontend)
 
+// Pub/Sub streaming-pull recovery. The gRPC streaming pull can stop delivering
+// without emitting an error — a NAT/router silently drops the idle TCP stream
+// during a quiet spell and the client never notices (no reconnect, no error).
+// A watchdog reopens the subscriber when nothing has arrived for a while; the
+// keepalive pings below aim to prevent the idle drop in the first place.
+const EVENT_STALL_MS = 30 * 60 * 1000;            // reopen if idle at least this long
+const EVENT_WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // how often the watchdog checks
+const PUBSUB_KEEPALIVE_OPTS = {
+	"grpc.keepalive_time_ms": 5 * 60 * 1000,       // ping the server every 5 min…
+	"grpc.keepalive_timeout_ms": 20 * 1000,        // …expect a pong within 20s
+	"grpc.keepalive_permit_without_calls": 1,      // keepalive even with no active RPC
+	"grpc.http2.max_pings_without_data": 0         // don't cap pings on an idle stream
+};
+
 function loadTokens() {
 	try {
 		const data = fs.readFileSync(getTokensPath(), "utf8");
@@ -226,6 +240,34 @@ module.exports = NodeHelper.create({
 			this._tokenInFlight = null;
 		}
 		this.sendTokenResult(payload.identifier, result);
+		// Once per process, kick Pub/Sub event publishing awake (see armEventPublishing).
+		if (result.kind === "TOKEN" && !this._eventsArmed) {
+			this._eventsArmed = true;
+			this.armEventPublishing(result.tokens.access_token, payload.nestProjectId);
+		}
+	},
+
+	// Google only (re)starts publishing camera events to the Pub/Sub topic after a
+	// devices.list call — a one-time trigger required after each authorization (per the
+	// Device Access docs). The frontend only ever calls executeCommand (streaming), so
+	// without this, events stay dark after any token revoke/re-auth even though streaming
+	// works. Fire devices.list once, right after we first obtain a valid token.
+	async armEventPublishing(token, projectId) {
+		if (!token || !projectId) return;
+		try {
+			const res = await fetch(
+				`https://smartdevicemanagement.googleapis.com/v1/enterprises/${projectId}/devices`,
+				{ headers: { Authorization: `Bearer ${token}` } }
+			);
+			const body = await res.json();
+			if (body.error) {
+				Log.warn(`[${this.name}] devices.list (event arming) returned: ${JSON.stringify(body.error)}`);
+			} else {
+				Log.info(`[${this.name}] armed Pub/Sub event publishing via devices.list (${(body.devices || []).length} devices)`);
+			}
+		} catch (e) {
+			Log.warn(`[${this.name}] devices.list (event arming) failed: ${e.message}`);
+		}
 	},
 
 	sendTokenResult(identifier, result) {
@@ -237,8 +279,31 @@ module.exports = NodeHelper.create({
 	},
 
 	async resolveToken(payload) {
-		// 1. Try to load saved tokens and refresh if we have refresh_token
 		let tokens = loadTokens();
+
+		// 1. Prefer exchanging a *newly supplied* authorization code. A new code means
+		//    the user just re-authorized (e.g. to change granted permissions), and that
+		//    intent must win over the stale saved grant — refreshing the old token would
+		//    silently discard the re-auth. We compare against the last-exchanged code so
+		//    an already-used code left in config doesn't trigger a failed exchange on
+		//    every restart. Single-use: on failure (expired/used) we fall through to the
+		//    saved refresh token below, so the cameras keep working.
+		if (payload.nestCode && payload.nestCode !== tokens?.exchangedCode) {
+			const resBody = await this.exchangeCodeForTokens(payload);
+			if (resBody.access_token) {
+				const newTokens = {
+					access_token: resBody.access_token,
+					refresh_token: resBody.refresh_token || tokens?.refresh_token,
+					exchangedCode: payload.nestCode
+				};
+				saveTokens(newTokens);
+				Log.info("Exchanged new Nest authorization code for fresh tokens");
+				return { kind: "TOKEN", tokens: newTokens };
+			}
+			Log.warn(`Nest code exchange failed; falling back to saved token: ${JSON.stringify(resBody)}`);
+		}
+
+		// 2. Refresh the saved token if we have a refresh_token.
 		if (tokens?.refresh_token) {
 			const refreshed = await this.refreshAccessToken({
 				nestClientId: payload.nestClientId,
@@ -253,26 +318,12 @@ module.exports = NodeHelper.create({
 			}
 		}
 
-		// 2. Try to exchange nestCode if provided (prioritize fresh auth over stale saved token)
-		if (payload.nestCode) {
-			const resBody = await this.exchangeCodeForTokens(payload);
-			if (resBody.access_token) {
-				const newTokens = {
-					access_token: resBody.access_token,
-					refresh_token: resBody.refresh_token || tokens?.refresh_token
-				};
-				saveTokens(newTokens);
-				return { kind: "TOKEN", tokens: newTokens };
-			}
-			Log.error(`Code exchange failed: ${JSON.stringify(resBody)}`);
-		}
-
 		// 3. Use saved access_token if we have one (e.g. no refresh_token yet)
 		if (tokens?.access_token) {
 			return { kind: "TOKEN", tokens };
 		}
 
-		// 4. No valid tokens and no nestCode (or exchange failed)
+		// 4. No valid tokens and no usable code
 		return {
 			kind: "NEED_AUTH",
 			authUrl: `https://accounts.google.com/o/oauth2/v2/auth?client_id=${payload.nestClientId}&redirect_uri=https://www.google.com&response_type=code&scope=https://www.googleapis.com/auth/sdm.service&access_type=offline&prompt=consent`
@@ -495,9 +546,8 @@ module.exports = NodeHelper.create({
 		this._eventSubs = this._eventSubs || {};
 		if (this._eventSubs[payload.subscription]) return;   // already listening
 
-		let PubSub;
 		try {
-			({ PubSub } = require("@google-cloud/pubsub"));
+			require("@google-cloud/pubsub");
 		} catch (e) {
 			Log.error(`[${this.name}] @google-cloud/pubsub not installed — run 'npm install' in the module folder. Motion events disabled.`);
 			return;
@@ -509,20 +559,69 @@ module.exports = NodeHelper.create({
 			return;
 		}
 
-		let subscription;
-		try {
-			const pubsub = new PubSub({ keyFilename: keyPath });
-			// Accept either a full resource path or a bare subscription id in config.
-			const subId = payload.subscription.includes("/")
-				? payload.subscription.split("/").pop()
-				: payload.subscription;
-			subscription = pubsub.subscription(subId);
-		} catch (e) {
-			Log.error(`[${this.name}] Pub/Sub init failed: ${e.message}`);
+		// Accept either a full resource path or a bare subscription id in config.
+		const subId = payload.subscription.includes("/")
+			? payload.subscription.split("/").pop()
+			: payload.subscription;
+
+		// Mark as listening up-front so a re-entrant INIT_EVENTS (e.g. a frontend
+		// re-render) is a no-op even while we open the streaming pull.
+		this._eventSubs[payload.subscription] = true;
+		if (!this.openEventSubscription(keyPath, subId, payload.subscription)) {
+			this._eventSubs[payload.subscription] = false;   // open failed; allow a retry
 			return;
 		}
 
+		// Watchdog backstop: if the streaming pull silently stalls, reopen it. Pub/Sub
+		// redelivers any backlog on reconnect and classifyEvent's eventSessionId dedupe
+		// absorbs the redeliveries, so a reopen can't double-count events.
+		this._lastEventAt = Date.now();
+		if (!this._eventWatchdog) {
+			this._eventWatchdog = setInterval(() => {
+				const idleMs = Date.now() - (this._lastEventAt || 0);
+				if (idleMs >= EVENT_STALL_MS) {
+					Log.warn(`[${this.name}] no Nest events for ${Math.round(idleMs / 60000)}m — reopening Pub/Sub subscription`);
+					this.openEventSubscription(keyPath, subId, payload.subscription);
+					this._lastEventAt = Date.now();   // reset so we reopen at most once per stall window
+				}
+			}, EVENT_WATCHDOG_INTERVAL_MS);
+		}
+	},
+
+	// Opens (or reopens) a Pub/Sub streaming pull for `subKey`. Tears down any
+	// previous client/subscriber for that key first so a reopen fully resets the
+	// gRPC channel. Returns true on success. Called on init and from the watchdog.
+	openEventSubscription(keyPath, subId, subKey) {
+		let PubSub;
+		try {
+			({ PubSub } = require("@google-cloud/pubsub"));
+		} catch (e) {
+			Log.error(`[${this.name}] @google-cloud/pubsub not installed. Motion events disabled.`);
+			return false;
+		}
+
+		this._subscribers = this._subscribers || {};
+		const prev = this._subscribers[subKey];
+		if (prev) {
+			try {
+				prev.subscription.removeAllListeners();
+				prev.subscription.close();
+				prev.client.close();
+			} catch (e) { /* best-effort teardown */ }
+			delete this._subscribers[subKey];
+		}
+
+		let client, subscription;
+		try {
+			client = new PubSub({ keyFilename: keyPath, ...PUBSUB_KEEPALIVE_OPTS });
+			subscription = client.subscription(subId);
+		} catch (e) {
+			Log.error(`[${this.name}] Pub/Sub init failed: ${e.message}`);
+			return false;
+		}
+
 		subscription.on("message", (message) => {
+			this._lastEventAt = Date.now();
 			try {
 				this.handleEventMessage(message);
 			} finally {
@@ -533,8 +632,9 @@ module.exports = NodeHelper.create({
 			Log.error(`[${this.name}] Pub/Sub subscription error: ${err.message}`);
 		});
 
-		this._eventSubs[payload.subscription] = subscription;
-		Log.info(`[${this.name}] listening for Nest events on ${payload.subscription}`);
+		this._subscribers[subKey] = { client, subscription };
+		Log.info(`[${this.name}] listening for Nest events on ${subKey}`);
+		return true;
 	},
 
 	async socketNotificationReceived(notification, payload) {

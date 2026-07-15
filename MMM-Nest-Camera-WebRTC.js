@@ -1272,6 +1272,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			nestClientId: first.config.nestClientId,
 			nestClientSecret: first.config.nestClientSecret,
 			nestCode: first.config.nestCode,
+			nestProjectId: first.config.nestProjectId,
 			identifier: this.identifier
 		});
 	},
