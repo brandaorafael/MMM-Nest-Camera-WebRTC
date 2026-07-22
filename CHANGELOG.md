@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.4.0] – 2026-07-22
+
+### Added
+- **Automatic camera names.** Each tile is now labelled with the camera's name from the Google Home app, fetched at runtime via the SDM API (`autoFetchNames`, on by default). Renaming a camera in Google Home is reflected on the mirror after a restart — no config edit needed. The name preference is the device's custom name, then its room; a per-camera `name` in config still overrides, and devices with no fetchable name fall back to the config `name`. The event-history feed uses the fetched names too. Because live WebRTC tiles are cached across re-renders, the label is patched in place when names arrive.
+
 ## [2.3.3] – 2026-07-12
 
 ### Changed

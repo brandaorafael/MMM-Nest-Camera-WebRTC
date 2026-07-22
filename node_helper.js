@@ -270,6 +270,45 @@ module.exports = NodeHelper.create({
 		}
 	},
 
+	// Fetch the user-assigned camera names from the SDM API so the tiles reflect
+	// whatever the cameras are called in the Google Home app (renaming there is
+	// otherwise invisible to MagicMirror). Returns a { deviceId: name } map to the
+	// requesting instance; the frontend overrides its config names with these.
+	// Name preference: the device's custom name (Info.customName), else its room
+	// (parentRelations[].displayName). Devices with neither are omitted, so the
+	// frontend keeps the config name as a fallback.
+	async fetchDeviceNames(payload) {
+		if (!payload || !payload.token || !payload.nestProjectId) return;
+		let body;
+		try {
+			const res = await fetch(
+				`https://smartdevicemanagement.googleapis.com/v1/enterprises/${payload.nestProjectId}/devices`,
+				{ headers: { Authorization: `Bearer ${payload.token}` } }
+			);
+			body = await res.json();
+		} catch (e) {
+			Log.warn(`[${this.name}] devices.list (names) failed: ${e.message}`);
+			return;
+		}
+		if (body.error) {
+			Log.warn(`[${this.name}] devices.list (names) error: ${JSON.stringify(body.error)}`);
+			return;
+		}
+		const names = {};
+		for (const d of body.devices || []) {
+			const deviceId = d.name ? d.name.split("/devices/")[1] : null;
+			if (!deviceId) continue;
+			const info = d.traits && d.traits["sdm.devices.traits.Info"];
+			const custom = info && typeof info.customName === "string" ? info.customName.trim() : "";
+			const rel = Array.isArray(d.parentRelations) ? d.parentRelations[0] : null;
+			const room = rel && typeof rel.displayName === "string" ? rel.displayName.trim() : "";
+			const name = custom || room;
+			if (name) names[deviceId] = name;
+		}
+		Log.info(`[${this.name}] fetched ${Object.keys(names).length} device name(s) from SDM`);
+		this.sendSocketNotification(`DEVICE_NAMES_${payload.identifier}`, names);
+	},
+
 	sendTokenResult(identifier, result) {
 		if (result.kind === "TOKEN") {
 			this.sendSocketNotification(`TOKEN_${identifier}`, result.tokens);
@@ -654,6 +693,9 @@ module.exports = NodeHelper.create({
 				break;
 			case "GET_TOKEN":
 				await this.getNestToken(payload);
+				break;
+			case "GET_DEVICE_NAMES":
+				await this.fetchDeviceNames(payload);
 				break;
 			case "CLIENT_LOG":
 				Log.info(`[${this.name}] ${payload.msg}`);

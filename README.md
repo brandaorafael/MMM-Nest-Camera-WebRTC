@@ -102,7 +102,8 @@ The device ID is the last segment of the `name` field, e.g. `enterprises/project
 | `nestClientId` | `""` | **Required.** OAuth 2.0 client ID from Google Cloud Console. Shared by all cameras. |
 | `nestClientSecret` | `""` | **Required.** OAuth 2.0 client secret from Google Cloud Console. Shared by all cameras. |
 | `nestDeviceId` | `""` | Single-camera setups: the Nest camera device ID. Ignored when `cameras` is set. |
-| `cameras` | `[]` | Multi-camera setups: an array of `{ name, nestDeviceId }` objects (see [Multi-Camera](#multi-camera)). |
+| `cameras` | `[]` | Multi-camera setups: an array of `{ nestDeviceId }` objects (see [Multi-Camera](#multi-camera)). An optional `name` overrides the auto-fetched label. |
+| `autoFetchNames` | `true` | Pull each camera's display name from the Google Home app (via the SDM API) so renaming a camera there is reflected automatically. A per-camera `name` in `cameras` takes precedence; devices with no fetchable name fall back to `name` (or `Camera N`). Set `false` to always use the config `name`. |
 | `layout` | `"hero"` | Layout mode. `"hero"` = one large camera + thumbnail strip. `"grid"` / `"carousel"` / `"focus"` are reserved for a future release and currently fall back to `hero`. |
 | `cycleInterval` | `0` | Milliseconds between automatic hero-camera rotations. `0` disables auto-cycling. |
 | `heroWidth` | `null` | CSS width of the hero camera (e.g. `"33%"`, `"640px"`). Falls back to `width`. |
@@ -136,15 +137,17 @@ To show multiple cameras, put the shared account credentials at the top level an
     thumbWidth: "18%",
 
     cameras: [
-      { name: "Front Door", nestDeviceId: "AVPHwEu...front" },
-      { name: "Backyard",   nestDeviceId: "AVPHwEu...back" },
-      { name: "Garage",     nestDeviceId: "AVPHwEu...garage" }
+      { nestDeviceId: "AVPHwEu...front" },
+      { nestDeviceId: "AVPHwEu...back" },
+      { nestDeviceId: "AVPHwEu...garage" }
     ]
   }
 }
 ```
 
-Each camera entry accepts `name`, `nestDeviceId`, and optional per-camera overrides for `extendInterval` and `reconnectDelay`. Get each device's ID with the curl command in [Getting your Device ID](#getting-your-device-id).
+Each camera entry needs only a `nestDeviceId` and accepts optional per-camera overrides for `name`, `extendInterval`, and `reconnectDelay`. Get each device's ID with the curl command in [Getting your Device ID](#getting-your-device-id).
+
+> **Camera names are fetched automatically.** By default (`autoFetchNames: true`) each tile is labelled with the camera's name from the Google Home app, so renaming a camera there is reflected on the mirror after a restart — no config edit needed. Provide a `name` on a camera to override the fetched label, or set `autoFetchNames: false` to always use config names.
 
 > **Backward compatible:** an existing single-camera config that uses a top-level `nestDeviceId` (and no `cameras` array) keeps working exactly as before.
 

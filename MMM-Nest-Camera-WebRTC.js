@@ -10,6 +10,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 		// Multi-camera
 		cameras: [],            // [{ name, nestDeviceId, width?, extendInterval?, reconnectDelay? }]
+		autoFetchNames: true,   // pull each camera's name from the Google Home app (SDM API); overrides the config `name`. Falls back to config `name` when a device has no fetchable name.
 		layout: "hero",         // 'hero' now; 'grid' | 'carousel' | 'focus' are Phase 3 stubs
 		cycleInterval: 0,       // ms; 0 = off. Rotates the hero camera automatically.
 		heroWidth: null,        // falls back to `width`
@@ -681,7 +682,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 		// Record it in the event history (persistence is handled by node_helper).
 		if (record) {
-			this.eventHistory.push({ name: cam.name, kind, label: cam.eventLabel, at: (opts && opts.at) || Date.now() });
+			this.eventHistory.push({ deviceId: cam.config.nestDeviceId, name: cam.name, kind, label: cam.eventLabel, at: (opts && opts.at) || Date.now() });
 			if (this.eventHistory.length > 500) this.eventHistory = this.eventHistory.slice(-500);
 			this.renderEventHistory();
 		}
@@ -785,12 +786,22 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 
 	seedHistory(stored) {
 		this.eventHistory = (Array.isArray(stored) ? stored : []).map((e) => ({
+			deviceId: e.deviceId,
 			name: this._nameForDevice(e.deviceId) || (e.deviceId ? e.deviceId.slice(0, 10) + "…" : "Camera"),
 			kind: e.kind,
 			label: e.label,
 			at: e.at
 		}));
 		this.renderEventHistory();
+	},
+
+	// Re-derive each history row's camera label from the current camera names.
+	// Called after device names are (re)fetched so the feed matches the tiles.
+	relabelHistory() {
+		for (const e of this.eventHistory) {
+			const name = this._nameForDevice(e.deviceId);
+			if (name) e.name = name;
+		}
 	},
 
 	_nameForDevice(deviceId) {
@@ -915,6 +926,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 		const label = document.createElement("div");
 		label.classList.add("rtw-label");
 		label.textContent = this.cameras[cameraId].name;
+		this.cameras[cameraId].labelEl = label;
 		wrapper.appendChild(label);
 		return wrapper;
 	},
@@ -1045,6 +1057,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 			const label = document.createElement("div");
 			label.classList.add("rtw-label");
 			label.textContent = cam.name;
+			cam.labelEl = label;
 			cam.wrapper.appendChild(label);
 
 			this._syncEqualizer(cameraId, isHero);
@@ -1183,6 +1196,7 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				this.needsAuth = false;
 				if (this.token) {
 					await this.initAllCameras();
+					this.requestDeviceNames();
 				}
 				this.updateDom();
 				break;
@@ -1196,6 +1210,47 @@ Module.register("MMM-Nest-Camera-WebRTC", {
 				// Persisted event history from node_helper (array of {deviceId, kind, label, at}).
 				this.seedHistory(payload);
 				break;
+			case "DEVICE_NAMES":
+				// { deviceId: name } pulled from the Google Home app via the SDM API.
+				this.applyDeviceNames(payload);
+				break;
+		}
+	},
+
+	// Ask node_helper for each camera's current name in the Google Home app. It
+	// replies DEVICE_NAMES_<identifier>. Runs once per token acquisition.
+	requestDeviceNames() {
+		if (!this.config.autoFetchNames || !this.token) return;
+		const first = this.cameras[this.cameraOrder[0]];
+		if (!first) return;
+		this.sendSocketNotification("GET_DEVICE_NAMES", {
+			token: this.token,
+			nestProjectId: first.config.nestProjectId,
+			identifier: this.identifier
+		});
+	},
+
+	// Override each camera's display name with the fetched Google Home name. A
+	// device missing from the map (no custom name / no room) keeps its config name.
+	applyDeviceNames(names) {
+		if (!names || typeof names !== "object") return;
+		let changed = false;
+		for (const id of this.cameraOrder) {
+			const cam = this.cameras[id];
+			const fetched = names[cam.config.nestDeviceId];
+			if (fetched && fetched !== cam.name) {
+				cam.name = fetched;
+				// Live video tiles are cached across updateDom (to avoid tearing down the
+				// WebRTC stream), so patch the existing label element in place.
+				if (cam.labelEl) cam.labelEl.textContent = fetched;
+				changed = true;
+			}
+		}
+		if (changed) {
+			this.relabelHistory();
+			this.renderEventHistory();
+			this.updateDom();
+			this.pushControlState();
 		}
 	},
 
